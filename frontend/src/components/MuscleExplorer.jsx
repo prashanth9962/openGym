@@ -5,8 +5,9 @@ import { activeProfile, exAvailable } from '../lib/equipment.js'
 import { bestWeightFor } from '../lib/history.js'
 import { fmtNum, exCount } from '../lib/format.js'
 import { MUSCLES, MUSCLE_NAME, musclesOf } from '../lib/muscles.js'
+import { SUB_MUSCLES, SUB_MUSCLE_NAME, subMusclesOf } from '../lib/sub-muscles.js'
 import { t, exerciseNameFor, exerciseNameClass } from '../lib/i18n.js'
-import BodyMap from './BodyMap.jsx'
+import AnatomyMap from './AnatomyMap.jsx'
 import { Thumb } from './Media.jsx'
 import Icon from './Icon.jsx'
 import { Button } from './ui.jsx'
@@ -21,7 +22,9 @@ export default function MuscleExplorer({ onPick, onDetail, onPlan }) {
   const [q, setQ] = useState('')
   const [bp, setBp] = useState('')
   const [eq, setEq] = useState('')
+  const [sub, setSub] = useState('')   // a region of the picked muscle (upper chest, rear delts…); '' = the whole muscle
   const [shown, setShown] = useState(40)
+  const [withSecondary, setWithSecondary] = useState(false)   // also list exercises that only train the muscle as a secondary
   const [showAll, setShowAll] = useState(false)   // ignore the active equipment profile for this session
   // Same rule as the Library and the picker: the active equipment profile narrows the catalogue
   // (and the per-muscle counts) unless the user asks for everything.
@@ -30,16 +33,22 @@ export default function MuscleExplorer({ onPick, onDetail, onPlan }) {
     const all = allExercises(S)
     return (profile && !showAll) ? all.filter(e => exAvailable(S, e)) : all
   }, [S.customEx, S.equipFilterOn, S.activeEquipId, S.equipProfiles, showAll])
+  // musclesOf weights a primary 1 and a supporting muscle less, so `=== 1` is "primary target".
+  const trains = (e, m) => withSecondary ? !!musclesOf(e)[m] : musclesOf(e)[m] === 1
   const counts = useMemo(() => Object.fromEntries(MUSCLES.map(m => [m,
-    catalog.filter(e => musclesOf(e)[m]).length
-  ])), [catalog])
-  const pick = muscle => { setSelected(muscle === selected ? null : muscle); setEq(''); setShown(40) }
-  const targeted = selected ? catalog.filter(e => musclesOf(e)[selected]) : []
+    catalog.filter(e => trains(e, m)).length
+  ])), [catalog, withSecondary])
+  const pick = muscle => { setSelected(muscle === selected ? null : muscle); setSub(''); setEq(''); setShown(40) }
+  const inMuscle = selected ? catalog.filter(e => trains(e, selected)) : []
+  const subs = (selected && SUB_MUSCLES[selected]) || []
+  const subCounts = Object.fromEntries(subs.map(r => [r, inMuscle.filter(e => subMusclesOf(e, selected).includes(r)).length]))
+  const targeted = sub ? inMuscle.filter(e => subMusclesOf(e, selected).includes(sub)) : inMuscle
   const base = searchExercises(targeted.filter(e => !bp || e.bp === bp), q)
   const eqOpts = equipmentOf(base)
   const eqOn = eqOpts.includes(eq) ? eq : ''
   // Favourites float to the top of whatever the filters left (issue #6), the rest keeps its order.
   const exercises = sortFavouritesFirst(eqOn ? base.filter(e => e.eq === eqOn) : base, S)
+    .map((e, i) => [e, i]).sort((a, b) => (musclesOf(b[0])[selected] === 1) - (musclesOf(a[0])[selected] === 1) || a[1] - b[1]).map(x => x[0])
   const choose = ex => onPick ? onPick(ex) : onDetail(ex)
   // The live count and the × of the Library's search (#338): the count while a search or a
   // filter narrows the muscle's list, the × while there is text.
@@ -54,13 +63,14 @@ export default function MuscleExplorer({ onPick, onDetail, onPlan }) {
       </button>
     </div>}
     <div className="card">
-      <BodyMap className="tappable" body={S.body} selected={selected} onMuscle={pick} />
+      <AnatomyMap className="tappable" selected={selected} region={sub} onMuscle={pick} />
       <div className="chips" style={{ marginTop: 10 }}>
         {MUSCLES.map(m => <button key={m} className={'chip' + (selected === m ? ' on' : '')}
           aria-pressed={selected === m} onClick={() => pick(m)}>
           {t(MUSCLE_NAME[m])} <span className="dim">{counts[m]}</span>
         </button>)}
       </div>
+      <div className="small dim" style={{ marginTop: 8 }}>{t('Body artwork by Ryan Graves, CC BY 4.0')}</div>
     </div>
 
     {!selected && onPick && <div className="empty"><div className="ico"><Icon name="figureStrength" /></div>{t('Choose a muscle to see exercises that train it.')}</div>}
@@ -69,6 +79,15 @@ export default function MuscleExplorer({ onPick, onDetail, onPlan }) {
       <div className="row between" style={{ margin: '2px 0 10px' }}>
         <h4 className="sec" style={{ margin: 0 }}>{t('Exercises for {0}', t(MUSCLE_NAME[selected]))}</h4>
         <Button size="sm" variant="ghost" onClick={() => pick(selected)}>{t('Clear selection')}</Button>
+      </div>
+      {subs.length > 0 && <div className="chips" style={{ marginBottom: 10 }}>
+        <button className={'chip nocap' + (!sub ? ' on' : '')} aria-pressed={!sub} onClick={() => { setSub(''); setEq(''); setShown(40) }}>{t('Whole muscle')}</button>
+        {subs.map(r => <button key={r} className={'chip nocap' + (sub === r ? ' on' : '')} aria-pressed={sub === r}
+          onClick={() => { setSub(sub === r ? '' : r); setEq(''); setShown(40) }}>{t(SUB_MUSCLE_NAME[r])} <span className="dim">{subCounts[r]}</span></button>)}
+      </div>}
+      <div className="chips" style={{ marginBottom: 10 }}>
+        <button className={'chip nocap' + (!withSecondary ? ' on' : '')} aria-pressed={!withSecondary} onClick={() => { setWithSecondary(false); setShown(40) }}>{t('Primary only')}</button>
+        <button className={'chip nocap' + (withSecondary ? ' on' : '')} aria-pressed={withSecondary} onClick={() => { setWithSecondary(true); setShown(40) }}>{t('Include secondary')}</button>
       </div>
       <div className={'search' + (narrowed ? ' has-count' : '') + (q ? ' has-clear' : '')} style={{ marginBottom: 10 }}><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
         <input className="input" placeholder={t('Search…')} value={q} onChange={e => { setQ(e.target.value); setShown(40) }} />

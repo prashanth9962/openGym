@@ -51,6 +51,7 @@ describe('MuscleExplorer body-part chips keep the equipment filter', () => {
   it('keeps the dumbbell filter when switching from lower arms to upper arms', () => {
     const host = render()
     act(() => { muscleChip(host, 'Biceps').click() })
+    act(() => { chipByText(host, 'Include secondary').click() })
 
     act(() => { chipByText(host, 'lower arms').click() })
     const dumbbell = chipByText(host, 'dumbbell')
@@ -71,6 +72,7 @@ describe('MuscleExplorer body-part chips keep the equipment filter', () => {
   it('"All" body parts still clears the equipment filter', () => {
     const host = render()
     act(() => { muscleChip(host, 'Biceps').click() })
+    act(() => { chipByText(host, 'Include secondary').click() })
     act(() => { chipByText(host, 'lower arms').click() })
     act(() => { chipByText(host, 'dumbbell').click() })
     expect(isOn(chipByText(host, 'dumbbell'))).toBe(true)
@@ -105,5 +107,54 @@ describe('MuscleExplorer search: the × and live count the Library has (#338)', 
     act(() => { chipByText(host, 'upper arms').click() })
     expect(count()).toBeTruthy()
     expect(clear()).toBeNull()
+  })
+})
+
+describe('MuscleExplorer primary vs secondary muscles', () => {
+  const rows = host => [...host.querySelectorAll('.list .item .ss')].map(n => n.textContent)
+
+  it('lists only exercises that target the muscle until "Include secondary" is chosen', () => {
+    const host = render()
+    act(() => { muscleChip(host, 'Biceps').click() })
+    expect(isOn(chipByText(host, 'Primary only'))).toBe(true)
+    expect(rows(host).length).toBeGreaterThan(0)
+    expect(rows(host).every(r => r.startsWith('Primary target'))).toBe(true)
+
+    const primaryCount = Number(muscleChip(host, 'Biceps').textContent.replace(/\D/g, ''))
+    act(() => { chipByText(host, 'Include secondary').click() })
+    expect(Number(muscleChip(host, 'Biceps').textContent.replace(/\D/g, ''))).toBeGreaterThan(primaryCount)
+    // primaries are listed first
+    const all = rows(host)
+    expect(all[0].startsWith('Primary target')).toBe(true)
+  })
+})
+
+describe('MuscleExplorer regions of a muscle', () => {
+  const names = host => [...host.querySelectorAll('.list .item .tt')].map(n => n.textContent.toLowerCase())
+
+  it('narrows chest to upper, mid or lower chest, and the whole muscle brings everything back', () => {
+    const host = render()
+    act(() => { muscleChip(host, 'Chest').click() })
+    const all = names(host).length
+    act(() => { muscleChip(host, 'Upper chest').click() })
+    const upper = names(host)
+    expect(upper.length).toBeGreaterThan(0)
+    expect(upper.every(n => /incline|upper|low to high|reverse/.test(n))).toBe(true)
+    act(() => { muscleChip(host, 'Lower chest').click() })
+    expect(names(host).every(n => /decline|dip|lower|high to low|pullover/.test(n))).toBe(true)
+    act(() => { chipByText(host, 'Whole muscle').click() })
+    expect(names(host).length).toBe(all)
+  })
+
+  it('offers regions for biceps, triceps and shoulders but not for abs', () => {
+    const host = render()
+    for (const [muscle, region] of [['Biceps', 'Brachialis'], ['Triceps', 'Long head'], ['Shoulders', 'Rear delts']]) {
+      act(() => { muscleChip(host, muscle).click() })
+      expect(chipByText(host, 'Whole muscle'), muscle).toBeTruthy()
+      expect([...host.querySelectorAll('.chips .chip')].some(b => b.textContent.startsWith(region)), region).toBe(true)
+      act(() => { muscleChip(host, muscle).click() })
+    }
+    act(() => { muscleChip(host, 'Abs').click() })
+    expect(chipByText(host, 'Whole muscle')).toBeFalsy()
   })
 })
