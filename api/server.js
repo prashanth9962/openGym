@@ -34,7 +34,8 @@ import { createMediaStore, mediaLimits, mediaConfig, MediaError, HASH_RE } from 
 import { effectiveRoutineId } from './queue.js';
 import { stampPut } from './sync-stamps.js';
 import { atomicWrite as durableWrite } from './durable.js';
-import { openStore, stateKey } from './store.js';
+import { openStore, stateKey, StoreConflict } from './store.js';
+import { createEph } from './eph.js';
 import { nudgeFor, nudgeWindowOpen, toneOf } from './nudge.js';
 
 const PORT = +(process.env.PORT || 3000);
@@ -98,7 +99,14 @@ const SECURE = /^https:/i.test(ORIGIN) ? ' Secure;' : '';
 fs.mkdirSync(DATA, { recursive: true });
 // Files in DATA by default; MongoDB when MONGODB_URI is set (store.js). The secret, the profile
 // database, the push keys and every profile's state live in it.
-const store = await openStore({ dir: DATA, uri: process.env.MONGODB_URI });
+// SERVERLESS=1: this process is one of many short-lived instances (a function on Netlify and the
+// like), so nothing is kept in memory between requests — every request reloads the documents it
+// needs from MongoDB, saves are conditional, and the timers become a scheduled call to
+// POST /api/internal/tick. Needs MONGODB_URI. See docs/SERVERLESS.md.
+const SERVERLESS = /^(1|true|yes|on)$/i.test(process.env.SERVERLESS || '');
+if (SERVERLESS && !process.env.MONGODB_URI) { console.error('SERVERLESS=1 needs MONGODB_URI'); process.exit(1); }
+const store = await openStore({ dir: DATA, uri: process.env.MONGODB_URI, serverless: SERVERLESS });
+if (SERVERLESS) await store.refresh(['secret', 'vapid', 'db', 'eph']);
 if (store.kind === 'mongodb') console.log('storage: MongoDB');
 /* The secrets are locked down file by file rather than by sealing the whole directory.
  *
@@ -115,7 +123,10 @@ const lock = f => { try { fs.chmodSync(path.join(DATA, f), 0o600); } catch { /* 
 ['secret', 'db.json', 'coach.json'].forEach(lock);
 
 /* ---------- secret + db ---------- */
-if (store.get('secret') == null) await store.set('secret', crypto.randomBytes(32).toString('hex'), 0o600);
+if (store.get('secret') == null) {
+  try { await store.set('secret', crypto.randomBytes(32).toString('hex'), 0o600); }
+  catch (e) { if (!(e instanceof StoreConflict)) throw e; await store.refresh(['secret']); }   // another instance made it first
+}
 const SECRET = store.get('secret').trim();
 
 // Every account, passkey and invite. Only a missing file starts empty: an unreadable one (a write
@@ -143,12 +154,15 @@ function loadDb() {
     }
   }
 }
-let db = loadDb();
-db.users = db.users || [];
-db.creds = db.creds || [];
-db.subs = db.subs || [];
-db.invites = db.invites || [];
-db.deviceLinks = db.deviceLinks || [];   // unused one-time device links, hashed (device-link.js)
+function normalizeDb(d) {
+  d.users = d.users || [];
+  d.creds = d.creds || [];
+  d.subs = d.subs || [];
+  d.invites = d.invites || [];
+  d.deviceLinks = d.deviceLinks || [];   // unused one-time device links, hashed (device-link.js)
+  return d;
+}
+let db = normalizeDb(loadDb());
 const isAdmin = user => !!user && (user.admin === true || ADMIN_UIDS.includes(user.id));
 // 0600: db.json holds passkey credential material. It used to be covered by a blanket 0700 on
 // the whole directory; now that the directory stays traversable, the file carries its own mode.
@@ -162,7 +176,8 @@ function saveDb() {
   // failure is logged here, and the routes that matter most (PUT /api/data) await their own.
   const done = store.set('db', text, 0o600);
   done.catch(e => console.error('db save failed', e.message));
-  store.set('db.bak', text, 0o600).catch(e => console.error('db.json.bak could not be written', e.message));
+  // MongoDB keeps its own history (backups, oplog); the .bak copy is for files.
+  if (!SERVERLESS) store.set('db.bak', text, 0o600).catch(e => console.error('db.json.bak could not be written', e.message));
   return done;
 }
 // Flushed before and after the rename (durable.js): a host reset must not bring back the file
@@ -217,7 +232,11 @@ const records = v => (Array.isArray(v) ? v.filter(record) : []);
 /* ---------- push notifications (Web Push / VAPID) ---------- */
 let vapid;
 try { vapid = JSON.parse(store.get('vapid') ?? ''); }
-catch { vapid = webpush.generateVAPIDKeys(); await store.set('vapid', JSON.stringify(vapid), 0o600); }
+catch {
+  vapid = webpush.generateVAPIDKeys();
+  try { await store.set('vapid', JSON.stringify(vapid), 0o600); }
+  catch (e) { if (!(e instanceof StoreConflict)) throw e; await store.refresh(['vapid']); vapid = JSON.parse(store.get('vapid')); }
+}
 const VAPID_SUBJECT = process.env.VAPID_SUBJECT || (SECURE ? ORIGIN : 'mailto:admin@localhost');
 webpush.setVapidDetails(VAPID_SUBJECT, vapid.publicKey, vapid.privateKey);
 
@@ -321,7 +340,16 @@ function pushEndpointError(raw) {
 // older client) still gets everything, as before. A resting device with no subscription of its
 // own gets nothing: the phone in the bag must not ring for a rest timed on the desktop. The
 // client re-sends its subscription with its id on every boot, so an id that changed heals there.
-async function sendPush(userId, payload, deviceId) {
+// Pushes still going out: a function is frozen once it answers, so serverless mode waits for them.
+const inflight = new Set();
+function sendPush(userId, payload, deviceId) {
+  const p = sendPushNow(userId, payload, deviceId);
+  inflight.add(p);
+  const done = () => inflight.delete(p);
+  p.then(done, done);
+  return p;
+}
+async function sendPushNow(userId, payload, deviceId) {
   let subs = db.subs.filter(s => s.userId === userId);
   if (deviceId) subs = subs.filter(s => !s.deviceId || s.deviceId === deviceId);
   if (!subs.length) return;
@@ -377,8 +405,12 @@ async function sendPush(userId, payload, deviceId) {
 // In memory only — an API restart drops whatever is pending.
 const restTimers = new Map(); // `${userId}:${deviceId}` -> Timeout
 const restKey = (userId, deviceId) => `${userId}:${deviceId || ''}`;
+// Serverless: no timer survives the request, so the alert is a record in the shared document
+// (`restDue`) and the next scheduled tick sends it — up to a tick late, not to the second.
+const restDue = new Map();    // key -> { userId, deviceId, lang, at }
 function scheduleRestTimer(userId, deviceId, sec, lang) {
   const k = restKey(userId, deviceId);
+  if (SERVERLESS) { restDue.set(k, { userId, deviceId, lang, at: Date.now() + sec * 1000, exp: Date.now() + sec * 1000 + 3600000 }); return; }
   const t = restTimers.get(k);
   if (t) clearTimeout(t);
   restTimers.set(k, setTimeout(() => {
@@ -387,6 +419,10 @@ function scheduleRestTimer(userId, deviceId, sec, lang) {
   }, sec * 1000));
 }
 function cancelRestTimer(userId, deviceId) {
+  if (SERVERLESS) {
+    for (const k of [...restDue.keys()]) if (deviceId ? k === restKey(userId, deviceId) : k.startsWith(userId + ':')) restDue.delete(k);
+    return;
+  }
   // no device id: an older client — clear everything the account has pending, as it always did
   for (const [k, t] of restTimers) {
     if (deviceId ? k === restKey(userId, deviceId) : k.startsWith(userId + ':')) { clearTimeout(t); restTimers.delete(k); }
@@ -477,7 +513,7 @@ function nudgeTick(user, S, now) {
   saveDb();
   sendPush(user.id, nudgePush(S.lang, toneOf(S.reminder), routine, now.date));
 }
-setInterval(() => {
+function reminderTick() {
   for (const user of db.users) {
     if (!db.subs.some(s => s.userId === user.id)) continue;
     // One user's state file is one user's problem: a shape this tick cannot read is logged and
@@ -506,7 +542,18 @@ setInterval(() => {
   }
 // Checked every 10s (not 60s) — ticks aren't aligned to the top of the minute, so a 60s
 // interval could sit on your target minute for up to 59s before noticing. 10s caps that at ~9s.
-}, REMINDER_TICK_MS).unref();
+}
+if (!SERVERLESS) setInterval(reminderTick, REMINDER_TICK_MS).unref();
+// Serverless tick (POST /api/internal/tick, called every minute by the scheduled function): the
+// reminders and nudges above, plus the rest-timer alerts that came due.
+function serverlessTick(now = Date.now()) {
+  reminderTick();
+  for (const [k, r] of [...restDue]) {
+    if (r.at > now) continue;
+    restDue.delete(k);
+    sendPush(r.userId, restTimerPush(r.lang), r.deviceId);
+  }
+}
 
 /* ---------- sessions (signed cookie) ---------- */
 function sign(payload) {
@@ -687,6 +734,8 @@ setInterval(() => { for (const [k, v] of challenges) if (v.exp < Date.now()) cha
 // app authenticates by redeeming a short code minted from an already signed-in browser tab —
 // same 5-min-TTL/one-shot shape as the WebAuthn challenge store above.
 const pairings = new Map(); // code -> {uid, exp}
+// Serverless: these three Maps are shared between instances through one MongoDB document (eph.js).
+const eph = createEph({ store, maps: { challenges, pairings, restDue } });
 const PAIR_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O/1/I — read off a screen
 function makePairCode() {
   let code;
@@ -2521,8 +2570,7 @@ coachJobs.setProposalHook((uid, pending) => {
     tag: 'coach-proposal', url: '#/coach'
   });
 });
-startCadence({ users: () => db.users, userNow });
-startWarmup();
+if (!SERVERLESS) { startCadence({ users: () => db.users, userNow }); startWarmup(); }
 
 // node's requestTimeout is one number for every route, and it is half an hour (below) for the
 // sake of one: a video uploaded over a slow uplink. Every other request keeps node's old five
@@ -2548,7 +2596,65 @@ function bodyDeadline(req) {
 // The Capacitor WebView origins of the Android and iOS app.
 const APP_ORIGINS = new Set(['https://localhost', 'capacitor://localhost', 'http://localhost']);
 
-const server = http.createServer(async (req, res) => {
+// ---------- serverless plumbing (SERVERLESS=1) ----------
+// What a request needs from MongoDB, loaded before its route runs.
+async function prepareRequest(req, url) {
+  await store.refresh(['db', 'eph']);
+  db = normalizeDb(loadDb());
+  eph.hydrate();
+  if (url.pathname.startsWith('/api/admin')) await store.refreshStates();   // the dashboard reads every profile
+  else { const u = readSession(req); if (u) await store.refresh([stateKey(u.id)]); }
+}
+// One request at a time per instance: the Maps and `db` above are module-level, so two requests
+// overlapping in one instance would read each other's half-finished state.
+let serialTail = Promise.resolve();
+function serial(fn) {
+  const run = serialTail.then(fn, fn);
+  serialTail = run.catch(() => {});
+  return run;
+}
+// The response is held back until everything the request wrote has reached MongoDB (saves, the
+// shared Maps, pushes) — "saved" must mean saved — and becomes a 503 if a write lost the race to
+// another instance, which the client retries. Resolves when the response is out.
+function deferResponse(res) {
+  const wh = res.writeHead.bind(res), we = res.end.bind(res);
+  let head = null;
+  const chunks = [];
+  res.writeHead = (status, headers) => { head = [status, headers]; return res; };
+  res.write = chunk => { chunks.push(Buffer.from(chunk)); return true; };
+  res.end = (chunk, enc) => {
+    if (chunk) chunks.push(Buffer.from(chunk, enc));
+    (async () => {
+      let err = null;
+      try { await Promise.allSettled([...inflight]); await eph.flush(); err = await store.settle(); }
+      catch (e) { err = e; }
+      if (err) {
+        console.error('serverless save failed:', err.message);
+        wh(503, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Retry-After': '1' });
+        return we(JSON.stringify({ error: 'conflict, retry', code: 'conflict' }));
+      }
+      if (head) wh(...head);
+      we(Buffer.concat(chunks));
+    })();
+    return res;
+  };
+  return new Promise(resolve => { res.once('close', resolve); setTimeout(resolve, 60000).unref(); });
+}
+// POST /api/internal/tick, from the scheduled function: reminders, nudges, due rest-timer alerts.
+async function internalTick(req, res) {
+  const want = process.env.CRON_SECRET || '';
+  const got = String(req.headers['x-cron-secret'] || '');
+  const ok = want.length >= 16 && got.length === want.length && crypto.timingSafeEqual(Buffer.from(got), Buffer.from(want));
+  if (!ok) return json(res, 404, { error: 'not found' });
+  await store.refresh(['db', 'eph']);
+  db = normalizeDb(loadDb());
+  eph.hydrate();
+  await store.refreshStates();
+  serverlessTick();
+  json(res, 200, { ok: true });
+}
+
+const handle = async (req, res) => {
   bodyDeadline(req);
   // Same-origin (the deployed nginx-proxied web app) never triggers CORS, so this only matters
   // for the paired mobile app calling in from its own WebView origin. It carries no cookie
@@ -2576,6 +2682,7 @@ const server = http.createServer(async (req, res) => {
   let url;
   try { url = new URL(req.url, 'http://x'); }
   catch { return json(res, 400, { error: 'bad request' }); }
+  if (SERVERLESS && req.method === 'POST' && url.pathname === '/api/internal/tick') return internalTick(req, res);
   let key = req.method + ' ' + url.pathname;
   // The one route with a parameter in its path. Mapped onto its template key here so the table
   // above stays a plain lookup, and so csrfOk and the catch-all see one name for every file.
@@ -2598,7 +2705,7 @@ const server = http.createServer(async (req, res) => {
     const wait = AUTH_BURST.take(addr) || (kind ? ADDR_FAILS.retryAfter(kind + '|' + addr) : 0);
     if (wait) return tooMany(res, wait);
   }
-  try { await handler(req, res); }
+  try { if (SERVERLESS) await prepareRequest(req, url); await handler(req, res); }
   catch (e) {
     if (e?.clientGone) { console.warn(key, 'client went away mid-body:', e.message); return; }
     if (e instanceof HttpError) {
@@ -2618,6 +2725,10 @@ const server = http.createServer(async (req, res) => {
     console.error(key, e);
     if (!res.headersSent) json(res, 500, { error: 'server error' });
   }
+};
+const server = http.createServer((req, res) => {
+  if (!SERVERLESS) return handle(req, res);
+  return serial(() => { const sent = deferResponse(res); handle(req, res).catch(e => { console.error(e); try { json(res, 500, { error: 'server error' }); } catch {} }); return sent; });
 });
 // Node's default of 300 s for a whole request would answer 408 to a 40 MB video on a ~1 Mbit/s
 // uplink. Half an hour covers that; a stalled upload is cut much sooner by its own 60 s idle
@@ -2629,4 +2740,7 @@ server.headersTimeout = 60000;
 // port that was actually bound: with PORT=0 the OS picks one, and a caller that did not choose it
 // (the tests spawn the server that way, and so does anyone running two instances on one box) has
 // no other way to learn it.
-server.listen(PORT, () => console.log(`gym-api on :${server.address().port} (rpID=${RP_ID}, origin=${ORIGIN})`));
+// Serverless: an ephemeral loopback port, for the function wrapper to reach (netlify/functions/api.mjs).
+export const ready = new Promise(resolve => server.once('listening', () => resolve(server.address().port)));
+if (SERVERLESS) server.listen(0, '127.0.0.1', () => console.log(`gym-api on :${server.address().port} (serverless, rpID=${RP_ID}, origin=${ORIGIN})`));
+else server.listen(PORT, () => console.log(`gym-api on :${server.address().port} (rpID=${RP_ID}, origin=${ORIGIN})`));

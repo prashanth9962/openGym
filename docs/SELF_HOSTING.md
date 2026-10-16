@@ -812,3 +812,5 @@ docker compose -f docker-compose.yml -f docker-compose.mongo.yml up -d --build
 - Back up with `mongodump` (or Atlas backups) instead of copying `./data`.
 - The optional MCP server reads MongoDB too when you give it the same `MONGODB_URI` (mcp/README.md).
 - One API process owns the data (as with files); do not run two against one database.
+
+- Want no server at all? See [SERVERLESS.md](SERVERLESS.md) (Netlify Functions + MongoDB).

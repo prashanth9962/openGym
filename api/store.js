@@ -23,6 +23,11 @@ function fileOf(key) {
   return key;
 }
 
+// A conditional write lost the race: another instance saved this document since it was read.
+export class StoreConflict extends Error {
+  constructor(key) { super('write conflict on ' + key); this.code = 'CONFLICT'; this.key = key; }
+}
+
 export const stateKey = uid => 'state:' + safeUid(uid);
 
 function fileStore(dir) {
@@ -45,7 +50,7 @@ function fileStore(dir) {
   };
 }
 
-async function mongoStore(uri, dir) {
+async function mongoStore(uri, dir, serverless = false) {
   let mongodb;
   try { mongodb = await import('mongodb'); }
   catch { throw new Error('MONGODB_URI is set but the "mongodb" package is not installed (npm install in api/)'); }
@@ -57,10 +62,20 @@ async function mongoStore(uri, dir) {
   const chain = new Map();    // key -> last write in flight, so a key's writes reach MongoDB in order
   const bump = key => ver.set(key, (ver.get(key) || 0) + 1);
 
-  for await (const d of col.find({})) { mem.set(d._id, d.v); bump(d._id); }
+  // Serverless: no instance owns the data, so nothing is loaded up front and memory is only what
+  // the current request pulled in (refresh). Each document carries a version `n`; a write names the
+  // version it read and loses (StoreConflict) if another instance has saved since.
+  const nv = new Map();       // key -> version this instance last read or wrote (absent = 0)
+  const pending = new Set();  // writes in flight, for settle()
+  const load = d => { mem.set(d._id, d.v); nv.set(d._id, d.n || 0); ver.set(d._id, d.n || 0); };
+  const unload = key => { mem.delete(key); nv.delete(key); ver.delete(key); };
+  const refresh = async keys => {
+    await Promise.all(keys.map(async key => { const d = await col.findOne({ _id: key }); d ? load(d) : unload(key); }));
+  };
+  if (!serverless) for await (const d of col.find({})) { mem.set(d._id, d.v); bump(d._id); }
   // First start on MongoDB with an existing data directory: bring its documents across once, so
   // nobody loses their profiles, history or signed-in sessions by switching backends.
-  if (mem.size === 0 && dir && fs.existsSync(dir)) {
+  if (!serverless && mem.size === 0 && dir && fs.existsSync(dir)) {
     const files = fileStore(dir);
     const names = fs.readdirSync(dir);
     const keys = ['secret', 'db', 'db.bak', 'vapid'];
@@ -83,6 +98,57 @@ async function mongoStore(uri, dir) {
     chain.set(key, run);
     return run;
   };
+  if (serverless) {
+    const failures = [];
+    const write = (key, op, quiet) => {
+      const run = (chain.get(key) || Promise.resolve()).catch(() => {}).then(op);
+      chain.set(key, run);
+      pending.add(run);
+      const done = () => pending.delete(run);
+      run.then(done, e => { done(); if (!quiet) failures.push(e); });
+      return run;
+    };
+    return {
+      kind: 'mongodb',
+      serverless: true,
+      async init() {},
+      get(key) { return mem.has(key) ? mem.get(key) : null; },
+      stamp(key) { return mem.has(key) ? ver.get(key) : null; },
+      refresh,
+      // every state document: the admin screens read other profiles' data
+      async refreshStates() {
+        for (const key of [...mem.keys()]) if (key.startsWith('state:')) unload(key);
+        for await (const d of col.find({ _id: /^state:/ })) load(d);
+      },
+      // `quiet`: the caller handles a failure itself (eph.js retries), so settle() does not report it
+      set(key, text, mode, quiet) {
+        mem.set(key, text);
+        return write(key, async () => {
+          const n0 = nv.get(key) || 0;
+          const doc = { _id: key, v: text, n: n0 + 1, t: new Date() };
+          if (n0 === 0) {
+            try { await col.insertOne(doc); }
+            catch (e) { throw e.code === 11000 ? new StoreConflict(key) : e; }
+          } else {
+            const r = await col.replaceOne({ _id: key, n: n0 }, doc);
+            if (!r.matchedCount) throw new StoreConflict(key);
+          }
+          nv.set(key, n0 + 1); ver.set(key, n0 + 1);
+        }, quiet);
+      },
+      del(key) {
+        unload(key);
+        return write(key, () => col.deleteOne({ _id: key })).then(() => {});
+      },
+      // Resolves to the first error of the writes made so far (a StoreConflict, or the database
+      // being down), or null when all of them landed. The request answers 503 on an error.
+      async settle() {
+        await Promise.allSettled([...pending]);
+        return failures.splice(0)[0] || null;
+      },
+      async close() { await Promise.allSettled([...chain.values()]); await client.close(); },
+    };
+  }
   return {
     kind: 'mongodb',
     async init() {},
@@ -106,8 +172,8 @@ async function mongoStore(uri, dir) {
   };
 }
 
-export async function openStore({ dir, uri }) {
-  const s = uri ? await mongoStore(uri, dir) : fileStore(dir);
+export async function openStore({ dir, uri, serverless = false }) {
+  const s = uri ? await mongoStore(uri, dir, serverless) : fileStore(dir);
   await s.init();
   return s;
 }
