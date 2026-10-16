@@ -792,3 +792,23 @@ effect on an already-built image — the bundle has already made up its mind.
 They are only useful if you build the frontend yourself (`docker compose up -d --build`, or a
 `npm run build` with the variables exported). If you need to redirect media on a prebuilt
 image, do it in your reverse proxy instead.
+
+## MongoDB instead of files (optional)
+
+By default the API keeps everything in `./data`. Set `MONGODB_URI` and it keeps the session
+secret, profiles and passkeys, push keys and every profile's training data in MongoDB instead
+(collection `documents` in the database `MONGODB_DB`, default `opengym`).
+
+```bash
+# local MongoDB container + the API pointed at it
+docker compose -f docker-compose.yml -f docker-compose.mongo.yml up -d --build
+
+# or a hosted cluster (Atlas free tier etc.): put MONGODB_URI=mongodb+srv://… in .env and
+# use the normal compose file
+```
+
+- The first start imports whatever is already in `./data`, so switching loses nothing.
+- Photos/videos uploads, the audit log and the Coach's settings stay files in `./data`.
+- Back up with `mongodump` (or Atlas backups) instead of copying `./data`.
+- The optional MCP server reads `./data` directly, so it does not see MongoDB-backed data.
+- One API process owns the data (as with files); do not run two against one database.

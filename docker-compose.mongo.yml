@@ -1,0 +1,20 @@
+# MongoDB as the database instead of ./data files. Use it on top of the normal file:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.mongo.yml up -d --build
+#
+# The first start imports whatever is already in ./data (profiles, history, sessions), so
+# switching over loses nothing. Uploads (photos/videos) and the audit log stay in ./data.
+# For a hosted cluster (Atlas free tier etc.) skip the `mongo` service and set MONGODB_URI
+# in .env to your connection string instead.
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - ./mongo:/data/db
+  api:
+    depends_on:
+      - mongo
+    environment:
+      MONGODB_URI: ${MONGODB_URI:-mongodb://mongo:27017}
+      MONGODB_DB: ${MONGODB_DB:-opengym}

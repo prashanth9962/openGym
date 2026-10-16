@@ -34,6 +34,7 @@ import { createMediaStore, mediaLimits, mediaConfig, MediaError, HASH_RE } from 
 import { effectiveRoutineId } from './queue.js';
 import { stampPut } from './sync-stamps.js';
 import { atomicWrite as durableWrite } from './durable.js';
+import { openStore, stateKey } from './store.js';
 import { nudgeFor, nudgeWindowOpen, toneOf } from './nudge.js';
 
 const PORT = +(process.env.PORT || 3000);
@@ -95,6 +96,10 @@ const MAX_BODY = 5 * 1024 * 1024;
 const SECURE = /^https:/i.test(ORIGIN) ? ' Secure;' : '';
 
 fs.mkdirSync(DATA, { recursive: true });
+// Files in DATA by default; MongoDB when MONGODB_URI is set (store.js). The secret, the profile
+// database, the push keys and every profile's state live in it.
+const store = await openStore({ dir: DATA, uri: process.env.MONGODB_URI });
+if (store.kind === 'mongodb') console.log('storage: MongoDB');
 /* The secrets are locked down file by file rather than by sealing the whole directory.
  *
  * A blanket `chmod 0700` on DATA looks stronger and is worse: ./data is a host bind mount and
@@ -110,11 +115,9 @@ const lock = f => { try { fs.chmodSync(path.join(DATA, f), 0o600); } catch { /* 
 ['secret', 'db.json', 'coach.json'].forEach(lock);
 
 /* ---------- secret + db ---------- */
-const secretFile = path.join(DATA, 'secret');
-if (!fs.existsSync(secretFile)) fs.writeFileSync(secretFile, crypto.randomBytes(32).toString('hex'), { mode: 0o600 });
-const SECRET = fs.readFileSync(secretFile, 'utf8').trim();
+if (store.get('secret') == null) await store.set('secret', crypto.randomBytes(32).toString('hex'), 0o600);
+const SECRET = store.get('secret').trim();
 
-const dbFile = path.join(DATA, 'db.json');
 // Every account, passkey and invite. Only a missing file starts empty: an unreadable one (a write
 // cut short by a power loss, a damaged restore) used to boot with no users at all, and the first
 // save then replaced it — every profile locked out, every training history orphaned, and with
@@ -123,15 +126,15 @@ const dbFile = path.join(DATA, 'db.json');
 // refuses to start, saying why, rather than start as a new instance.
 function loadDb() {
   let raw;
-  try { raw = fs.readFileSync(dbFile, 'utf8'); }
-  catch (e) { if (e.code === 'ENOENT') return { users: [], creds: [], subs: [], invites: [] }; throw e; }
+  raw = store.get('db');
+  if (raw == null) return { users: [], creds: [], subs: [], invites: [] };
   const parse = text => { const v = JSON.parse(text); if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error('not an object'); return v; };
   try { return parse(raw); } catch (err) {
-    const aside = `${dbFile}.unreadable-${Date.now()}`;
-    try { fs.copyFileSync(dbFile, aside); } catch { /* the original stays where it is anyway */ }
-    console.error(`db.json cannot be read (${err.message}); kept a copy as ${path.basename(aside)}`);
+    const asideKey = `db.unreadable-${Date.now()}`;
+    try { store.set(asideKey, raw); } catch { /* the original stays where it is anyway */ }
+    console.error(`db.json cannot be read (${err.message}); kept a copy as ${asideKey}`);
     try {
-      const bak = parse(fs.readFileSync(dbFile + '.bak', 'utf8'));
+      const bak = parse(store.get('db.bak'));
       console.error('db.json: using db.json.bak, the copy of the last save');
       return bak;
     } catch {
@@ -155,9 +158,12 @@ const isAdmin = user => !!user && (user.admin === true || ADMIN_UIDS.includes(us
 // A write cut short leaves the previous db.json.bak whole (temporary file and rename).
 function saveDb() {
   const text = JSON.stringify(db, null, 2);
-  atomicWrite(dbFile, text, 0o600);
-  try { atomicWrite(dbFile + '.bak', text, 0o600); }
-  catch (e) { console.error('db.json.bak could not be written', e.message); }
+  // Files: written on the spot, as ever. MongoDB: the write is in flight when this returns; a
+  // failure is logged here, and the routes that matter most (PUT /api/data) await their own.
+  const done = store.set('db', text, 0o600);
+  done.catch(e => console.error('db save failed', e.message));
+  store.set('db.bak', text, 0o600).catch(e => console.error('db.json.bak could not be written', e.message));
+  return done;
 }
 // Flushed before and after the rename (durable.js): a host reset must not bring back the file
 // the client was told had been replaced.
@@ -165,7 +171,6 @@ function atomicWrite(file, content, mode) { durableWrite(file, content, mode); }
 // How many earlier write ids a document keeps (`_wids`, see PUT /api/data): a device that last
 // synced more writes ago than this merges on its next pull instead of taking the server's copy.
 const WID_KEEP = 50;
-const stateFile = uid => path.join(DATA, 'state-' + uid.replace(/[^a-zA-Z0-9_-]/g, '') + '.json');
 // When a profile last fetched its document (GET /api/data). The document's own `_ts` moves only
 // on a push, so a device that only ever read — a second phone, a profile that trains elsewhere
 // and just looks — showed "last sync never" in the admin dashboard (QA 1.3.9). Kept on the user
@@ -179,7 +184,7 @@ function notePull(user, now = Date.now()) {
 // The later of the last push and the last pull.
 const lastSyncOf = (u, S) => Math.max(S?._ts || 0, u?.lastPull || 0) || null;
 function readState(uid) {
-  try { return JSON.parse(fs.readFileSync(stateFile(uid), 'utf8')); } catch { return null; }
+  try { const t = store.get(stateKey(uid)); return t == null ? null : JSON.parse(t); } catch { return null; }
 }
 // GET and PUT /api/data tell a profile with no state yet from one whose file cannot be read: the
 // second answers 503 instead of an empty profile, which a device would adopt, or a write would
@@ -187,8 +192,9 @@ function readState(uid) {
 const UNREADABLE = Symbol('unreadable');
 function readStateStrict(uid) {
   let raw;
-  try { raw = fs.readFileSync(stateFile(uid), 'utf8'); }
-  catch (e) { return e.code === 'ENOENT' ? null : UNREADABLE; }
+  try { raw = store.get(stateKey(uid)); }
+  catch { return UNREADABLE; }
+  if (raw == null) return null;
   try { return JSON.parse(raw); } catch { return UNREADABLE; }
 }
 // A stored document as a client gets it: without the server's own notes `_unstamped` and `_prior`.
@@ -209,10 +215,9 @@ const record = x => !!x && typeof x === 'object' && !Array.isArray(x);
 const records = v => (Array.isArray(v) ? v.filter(record) : []);
 
 /* ---------- push notifications (Web Push / VAPID) ---------- */
-const vapidFile = path.join(DATA, 'vapid.json');
 let vapid;
-try { vapid = JSON.parse(fs.readFileSync(vapidFile, 'utf8')); }
-catch { vapid = webpush.generateVAPIDKeys(); fs.writeFileSync(vapidFile, JSON.stringify(vapid), { mode: 0o600 }); }
+try { vapid = JSON.parse(store.get('vapid') ?? ''); }
+catch { vapid = webpush.generateVAPIDKeys(); await store.set('vapid', JSON.stringify(vapid), 0o600); }
 const VAPID_SUBJECT = process.env.VAPID_SUBJECT || (SECURE ? ORIGIN : 'mailto:admin@localhost');
 webpush.setVapidDetails(VAPID_SUBJECT, vapid.publicKey, vapid.privateKey);
 
@@ -437,21 +442,21 @@ const STATE_CACHE_MAX = 64;
 // (10 s), so nobody who is actually using the instance is ever evicted by age; the tests shorten
 // it, as they do REMINDER_TICK_MS.
 const STATE_CACHE_TTL_MS = Math.max(50, +(process.env.STATE_CACHE_TTL_MS || 600000) || 600000);
-const stateCache = new Map(); // uid -> { mtimeMs, size, hitAt, S }
+const stateCache = new Map(); // uid -> { stamp, hitAt, S }
 function readStateCached(uid) {
-  let st;
-  try { st = fs.statSync(stateFile(uid)); } catch { stateCache.delete(uid); return null; }
+  const st = store.stamp(stateKey(uid));
+  if (st == null) { stateCache.delete(uid); return null; }
   const now = Date.now();
   for (const [k, v] of stateCache) if (now - v.hitAt > STATE_CACHE_TTL_MS) stateCache.delete(k);
   const hit = stateCache.get(uid);
   stateCache.delete(uid);                       // re-inserted below, so the map stays in hit order
-  if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) {
+  if (hit && hit.stamp === st) {
     hit.hitAt = now;
     stateCache.set(uid, hit);
     return hit.S;
   }
   const S = readState(uid);
-  stateCache.set(uid, { mtimeMs: st.mtimeMs, size: st.size, hitAt: now, S });
+  stateCache.set(uid, { stamp: st, hitAt: now, S });
   while (stateCache.size > STATE_CACHE_MAX) stateCache.delete(stateCache.keys().next().value);
   return S;
 }
@@ -2197,7 +2202,10 @@ const routes = {
     let text;
     try { text = JSON.stringify(body.state); }
     catch (e) { if (e instanceof RangeError) return json(res, 400, { error: 'invalid state' }); throw e; }
-    atomicWrite(stateFile(user.id), text);
+    // Files: on disk when this returns. MongoDB: memory is updated first (so the compare above
+    // stays atomic) and the answer below waits for the database to confirm.
+    try { await store.set(stateKey(user.id), text); }
+    catch (e) { stateCache.delete(user.id); console.error('state save failed for', user.id, e.message); return json(res, 503, { error: 'storage unavailable' }); }
     // The stat cache cannot see this write on its own: mtime granularity is 4 ms here (ext4 on
     // this kernel — 3901 of 3999 back-to-back same-size writes shared one timestamp), and a
     // `_rev` going from 7 to 8 does not change the file's size, so two writes inside one 4 ms
@@ -2403,7 +2411,7 @@ const routes = {
     dropDeviceLinks(db, u.id);
     presence.delete(u.id);
     // The training history and any Coach credential of theirs, both outside db.json.
-    try { fs.unlinkSync(stateFile(u.id)); } catch { /* already gone */ }
+    try { await store.del(stateKey(u.id)); } catch (e) { console.error('state delete failed for', u.id, e.message); }
     try { coachConfig.clearProfileAuth(u.id); } catch { /* nothing stored */ }
     // Their photos and videos — the one place a profile's folder under uploads/ is removed.
     try { MEDIA.removeUser(u.id); } catch (e) { console.error('media: could not remove uploads of', u.id, e.message); }
