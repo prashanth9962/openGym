@@ -55,7 +55,11 @@ async function mongoStore(uri, dir, serverless = false) {
   try { mongodb = await import('mongodb'); }
   catch { throw new Error('MONGODB_URI is set but the "mongodb" package is not installed (npm install in api/)'); }
   const client = new mongodb.MongoClient(uri, { serverSelectionTimeoutMS: 10000 });
-  await client.connect();
+  // A cold start can meet a network that is not quite up yet: a couple of tries before giving up.
+  for (let attempt = 1; ; attempt++) {
+    try { await client.connect(); break; }
+    catch (e) { if (attempt >= 3) throw e; console.error('mongodb: connect failed, retrying:', String(e.message).split('\n')[0]); await new Promise(r => setTimeout(r, 800 * attempt)); }
+  }
   const col = client.db(process.env.MONGODB_DB || 'opengym').collection('documents');
   const mem = new Map();      // key -> text
   const ver = new Map();      // key -> write counter (the stamp)

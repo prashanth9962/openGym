@@ -103,9 +103,11 @@ fs.mkdirSync(DATA, { recursive: true });
 // like), so nothing is kept in memory between requests — every request reloads the documents it
 // needs from MongoDB, saves are conditional, and the timers become a scheduled call to
 // POST /api/internal/tick. Needs MONGODB_URI. See docs/SERVERLESS.md.
+// A pasted value often carries a trailing space or quotes; neither belongs to the address.
+const MONGODB_URI = (process.env.MONGODB_URI || '').trim().replace(/^["']|["']$/g, '');
 const SERVERLESS = /^(1|true|yes|on)$/i.test(process.env.SERVERLESS || '');
-if (SERVERLESS && !process.env.MONGODB_URI) { console.error('SERVERLESS=1 needs MONGODB_URI'); process.exit(1); }
-const store = await openStore({ dir: DATA, uri: process.env.MONGODB_URI, serverless: SERVERLESS });
+if (SERVERLESS && !MONGODB_URI) { console.error('SERVERLESS=1 needs MONGODB_URI'); process.exit(1); }
+const store = await openStore({ dir: DATA, uri: MONGODB_URI, serverless: SERVERLESS });
 if (SERVERLESS) await store.refresh(['secret', 'vapid', 'db', 'eph']);
 if (store.kind === 'mongodb') console.log('storage: MongoDB');
 /* The secrets are locked down file by file rather than by sealing the whole directory.
