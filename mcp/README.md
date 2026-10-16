@@ -39,6 +39,13 @@ node src/index.js
 OPENGYM_UID=<your-uid> OPENGYM_DATA=/path/to/openGym/data node src/index.js
 ```
 
+
+**Using MongoDB?** If the API runs with `MONGODB_URI` (see docs/SELF_HOSTING.md), point the MCP
+server at the same database instead of `./data`: set `MONGODB_URI` (and `MONGODB_DB` if you changed
+it) in its environment, plus `OPENGYM_UID` if there is more than one profile. Run `npm install` in
+`mcp/` once. It stays read-only, and it re-reads before every tool call, so it sees what the app
+just saved.
+
 ### 3. Register with your LLM client
 
 Add the server to your LLM client's MCP config. For Claude Desktop, edit

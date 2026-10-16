@@ -810,5 +810,5 @@ docker compose -f docker-compose.yml -f docker-compose.mongo.yml up -d --build
 - The first start imports whatever is already in `./data`, so switching loses nothing.
 - Photos/videos uploads, the audit log and the Coach's settings stay files in `./data`.
 - Back up with `mongodump` (or Atlas backups) instead of copying `./data`.
-- The optional MCP server reads `./data` directly, so it does not see MongoDB-backed data.
+- The optional MCP server reads MongoDB too when you give it the same `MONGODB_URI` (mcp/README.md).
 - One API process owns the data (as with files); do not run two against one database.

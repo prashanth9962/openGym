@@ -5,7 +5,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { TOOLS } from './tools.js'
-import { init, getUser } from './state.js'
+import { init, initAsync, refresh, getUser } from './state.js'
 
 const server = new McpServer({
   name: 'opengym',
@@ -16,6 +16,7 @@ const server = new McpServer({
 // the no-state sentinel. Always register every tool so the LLM sees the full list at
 // handshake, even when state didn't resolve.
 try {
+  await initAsync()   // MongoDB mode connects here; a no-op for files
   init()
   const u = getUser()
   console.error(`[opengym-mcp] serving profile ${u.name} (${u.id})`)
@@ -32,6 +33,7 @@ for (const t of TOOLS) {
     t.schema,
     async (params) => {
       try {
+        await refresh()
         const result = t.handler(params || {})
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }
       } catch (err) {

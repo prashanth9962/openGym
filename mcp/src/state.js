@@ -1,10 +1,59 @@
-/* opengym-mcp state — reads ./data/state-<uid>.json + db.json (read-only). Cached with an
+/* opengym-mcp state — reads ./data/state-<uid>.json + db.json (read-only), or the same documents
+   from MongoDB when MONGODB_URI is set (the api's MONGODB_URI mode, api/store.js). Cached with an
    fs.watch + mtime fallback so a session the api server just wrote is visible on the next
    tool call without a restart. */
 import fs from 'node:fs'
 import path from 'node:path'
 
 const DATA_DIR = process.env.OPENGYM_DATA || path.join(process.cwd(), 'data')
+const MONGO_URI = process.env.MONGODB_URI || ''
+
+// MongoDB mode: the api keeps each document as { _id: 'db' | 'state:<uid>', v: <JSON text> }. The
+// tools stay synchronous, so everything is fetched into the cache up front (initAsync) and again
+// before each tool call (refresh); the cache is what init()/getState()/getUser() then answer from.
+let _col = null
+let _mongo = null
+async function mongoDoc(id) {
+  const d = await _col.findOne({ _id: id })
+  if (!d) return null
+  try { return JSON.parse(d.v) } catch (e) {
+    const err = new Error(`${id} in MongoDB is not valid JSON: ${e.message}`)
+    err.code = 'EIO'
+    throw err
+  }
+}
+const withDefaults = s => (s ? Object.assign({}, defaultsShape(), s) : null)
+
+export async function initAsync() {
+  if (!MONGO_URI || _uid !== null) return
+  let mod
+  try { mod = await import('mongodb') } catch { throw new Error('MONGODB_URI is set but the "mongodb" package is not installed (npm install in mcp/)') }
+  _mongo = new mod.MongoClient(MONGO_URI, { serverSelectionTimeoutMS: 10000 })
+  await _mongo.connect()
+  _col = _mongo.db(process.env.MONGODB_DB || 'opengym').collection('documents')
+  _db = (await mongoDoc('db')) || { users: [], creds: [], subs: [], invites: [] }
+  const envUid = (process.env.OPENGYM_UID || '').trim()
+  let uid = envUid
+  if (uid) {
+    if (!/^[a-zA-Z0-9_-]+$/.test(uid)) throw new Error(`OPENGYM_UID contains characters that aren't safe: ${JSON.stringify(uid)}`)
+  } else {
+    const ids = (await _col.find({ _id: /^state:/ }, { projection: { _id: 1 } }).toArray()).map(d => d._id.slice(6))
+    const pool = ids.length ? ids : (_db.users || []).map(u => u.id)
+    if (pool.length === 1) uid = pool[0]
+    else if (pool.length === 0) throw new Error('no openGym users found in MongoDB — sign in at least once on a device')
+    else throw ambiguousUid(pool)
+  }
+  _uid = uid
+  _state = withDefaults(await mongoDoc('state:' + uid))
+}
+
+// Before each tool call: pick up what the api wrote since. A no-op for files, which getState()
+// already re-reads on an mtime change.
+export async function refresh() {
+  if (!_col) return
+  _db = (await mongoDoc('db')) || _db
+  _state = withDefaults(await mongoDoc('state:' + _uid))
+}
 
 // null = no state file (brand-new account); undefined = not yet loaded.
 let _state = undefined
@@ -84,6 +133,7 @@ function ambiguousUid(ids) {
 // Idempotent. Picks the uid, loads db.json, attaches the watcher, primes state.
 export function init() {
   if (_uid !== null) return
+  if (MONGO_URI) throw new Error('MongoDB is not connected yet (initAsync did not finish)')
   if (!fs.existsSync(DATA_DIR)) throw new Error(`OPENGYM_DATA dir does not exist: ${DATA_DIR}`)
   _uid = resolveUid()
   reloadDb()
@@ -115,6 +165,7 @@ export function init() {
 // Returns the state object, or null for a fresh account that never signed in on a device.
 export function getState() {
   init()
+  if (_col) return _state
   const file = stateFile(_uid)
   // Re-read if the file's mtime changed since our last load — covers watcher omissions and
   // platforms with no fs.watch.
