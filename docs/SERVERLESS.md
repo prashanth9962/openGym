@@ -53,16 +53,19 @@ running. So in this mode:
 ## Remote MCP (ChatGPT and other cloud clients)
 
 The same read-only tools as `mcp/` (routines, workouts, 1RM, muscle balance…) are served over
-Streamable HTTP at `/mcp/<MCP_TOKEN>`, for clients that cannot start a local process.
+Streamable HTTP at `/mcp`, for clients that cannot start a local process. No environment variable
+is needed beyond `MONGODB_URI`.
 
-1. Set `MCP_TOKEN` in Netlify: a random string of 24+ characters (`openssl rand -hex 24`). Without it
-   the endpoint answers 404. Redeploy.
-2. In ChatGPT (custom connector / developer mode), add the URL `https://<your-site>/mcp/<MCP_TOKEN>`
-   with no authentication. Clients that can send headers may use `https://<your-site>/mcp` with
-   `Authorization: Bearer <MCP_TOKEN>` instead.
+1. Sign in, then Settings → Account → **AI assistants (MCP)** → **Make a token**. It is shown once:
+   copy it. Only its SHA-256 is stored on your profile in MongoDB.
+2. In ChatGPT (custom connector / developer mode), if the form has a field for a token or API key,
+   use `https://<your-site>/mcp` and paste the token there (sent as `Authorization: Bearer <token>`).
+   If it only offers "no authentication", use `https://<your-site>/mcp/<token>` instead.
 
-The token is the only protection: anyone holding the URL can read your training data, and a URL
-can end up in logs or screenshots. Rotate it by changing the variable. The tools never write.
+Each profile has its own token and sees only its own data. Making a new token replaces the old one;
+Revoke in the same screen stops it at once. Anyone holding the token can read your training data,
+and a URL can end up in logs or screenshots, so prefer the header form when the client allows it.
+The tools never write.
 
 ## Moving data from a Docker install
 

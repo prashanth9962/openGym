@@ -2,6 +2,7 @@
    from MongoDB when MONGODB_URI is set (the api's MONGODB_URI mode, api/store.js). Cached with an
    fs.watch + mtime fallback so a session the api server just wrote is visible on the next
    tool call without a restart. */
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -24,14 +25,21 @@ async function mongoDoc(id) {
 }
 const withDefaults = s => (s ? Object.assign({}, defaultsShape(), s) : null)
 
-export async function initAsync() {
-  if (!MONGO_URI || _uid !== null) return
+// Connects once per process and loads the db document; idempotent.
+export async function connectMongo() {
+  if (!MONGO_URI || _col) return
   let mod
   try { mod = await import('mongodb') } catch { throw new Error('MONGODB_URI is set but the "mongodb" package is not installed (npm install in mcp/)') }
-  _mongo = new mod.MongoClient(MONGO_URI, { serverSelectionTimeoutMS: 10000 })
-  await _mongo.connect()
+  const client = new mod.MongoClient(MONGO_URI, { serverSelectionTimeoutMS: 10000 })
+  await client.connect()
+  _mongo = client
   _col = _mongo.db(process.env.MONGODB_DB || 'opengym').collection('documents')
   _db = (await mongoDoc('db')) || { users: [], creds: [], subs: [], invites: [] }
+}
+
+export async function initAsync() {
+  if (!MONGO_URI || _uid !== null) return
+  await connectMongo()
   const envUid = (process.env.OPENGYM_UID || '').trim()
   let uid = envUid
   if (uid) {
@@ -43,6 +51,31 @@ export async function initAsync() {
     else if (pool.length === 0) throw new Error('no openGym users found in MongoDB — sign in at least once on a device')
     else throw ambiguousUid(pool)
   }
+  _uid = uid
+  _state = withDefaults(await mongoDoc('state:' + uid))
+}
+
+// The remote transport serves whichever profile the request's token belongs to. The token is made
+// in Settings (api/server.js, POST /api/account/mcp-token); only its SHA-256 is stored, as
+// user.mcp.h on the profile in the `db` document. Returns the user id, or null for an unknown or
+// revoked token. Reads the db document afresh so a revoke takes effect on the next request.
+export async function uidForMcpToken(token) {
+  if (!token) return null
+  if (_col) _db = (await mongoDoc('db')) || _db
+  const want = Buffer.from(crypto.createHash('sha256').update(String(token)).digest('hex'))
+  let found = null
+  for (const u of (_db?.users || [])) {
+    const h = Buffer.from(String(u.mcp?.h || ''))
+    // no early exit: every profile is compared, so the time does not say which one matched
+    if (h.length === want.length && crypto.timingSafeEqual(h, want) && !u.disabled) found = u.id
+  }
+  return found
+}
+
+// Point the cache at `uid` (remote transport; the caller serialises requests, the cache is one
+// profile at a time). Without MongoDB there is only the profile that was seeded.
+export async function selectUser(uid) {
+  if (!_col) { if (uid !== _uid) throw new Error('remote MCP needs MONGODB_URI'); return }
   _uid = uid
   _state = withDefaults(await mongoDoc('state:' + uid))
 }
@@ -204,6 +237,8 @@ export function _seedStateForTests(state) {
   _loadedMtime = Number.MAX_SAFE_INTEGER   // never re-read from disk in a test
   if (_watcher) { _watcher.close(); _watcher = null }
 }
+
+export function _setMcpHashForTests(h) { _db.users[0].mcp = { h, created: 1 } }
 
 function defaultsShape() {
   return {

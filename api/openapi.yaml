@@ -541,6 +541,58 @@ paths:
               schema: { $ref: '#/components/schemas/Ok' }
         '401': { $ref: '#/components/responses/Unauthorized' }
 
+  /api/account/mcp-token:
+    get:
+      tags: [passkeys]
+      operationId: mcpTokenStatus
+      summary: Whether a remote MCP token exists for this profile
+      responses:
+        '200':
+          description: Whether a token exists and when it was made. The token itself is never returned again.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  on: { type: boolean }
+                  created: { type: integer, nullable: true, description: Epoch milliseconds. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [passkeys]
+      operationId: mcpTokenCreate
+      summary: Make a remote MCP token (replaces the previous one)
+      description: |
+        For LLM clients that cannot run a local process (ChatGPT's custom connectors). The token
+        opens the read-only MCP endpoint `/mcp/<token>` (or `/mcp` with `Authorization: Bearer
+        <token>`) for this profile. It is returned once; only its SHA-256 is stored.
+      responses:
+        '200':
+          description: The new token, shown once.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+                  created: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { description: The profile could not be saved; try again. }
+    delete:
+      tags: [passkeys]
+      operationId: mcpTokenRevoke
+      summary: Revoke the remote MCP token
+      responses:
+        '200':
+          description: The token is gone; the MCP endpoint refuses it from now on.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { description: The profile could not be saved; try again. }
+
   /api/pair/create:
     post:
       tags: [pairing]

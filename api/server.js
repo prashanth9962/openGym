@@ -975,6 +975,7 @@ const THROTTLED = {
   // budget: the password that may prove them counts its own failures (passwordAttempt).
   'POST /api/device-link/options': 'link', 'POST /api/device-link/verify': 'link',
   'POST /api/account/passkeys/options': null, 'POST /api/account/device-link': null,
+  'POST /api/account/mcp-token': null, 'DELETE /api/account/mcp-token': null,
   'DELETE /api/account/passkeys': null
 };
 
@@ -2103,6 +2104,35 @@ const routes = {
     saveDb();
     audit(req, 'auth.logout.all', { user });
     json(res, 200, { ok: true }, { 'Set-Cookie': clearCookie });
+  },
+
+  // Remote MCP access (mcp/src/remote.js, /mcp on the serverless deployment): a read-only token
+  // for LLM clients that cannot run a local process, such as ChatGPT. Made here, shown once, and
+  // only its SHA-256 is kept on the profile -- the token is 192 random bits, so a plain hash is
+  // enough and the database never holds a usable credential. One token per profile: making a new
+  // one replaces the old, and revoking removes it. The MCP server reads the hash from the same
+  // `db` document and applies the same one-way function (mcp/src/state.js).
+  'GET /api/account/mcp-token': async (req, res) => {
+    const user = readSession(req);
+    if (!user) return json(res, 401, { error: 'not signed in' });
+    json(res, 200, { on: !!user.mcp?.h, created: user.mcp?.created || null });
+  },
+  'POST /api/account/mcp-token': async (req, res) => {
+    const user = readSession(req);
+    if (!user) return json(res, 401, { error: 'not signed in' });
+    const token = 'ogm_' + crypto.randomBytes(24).toString('base64url');
+    user.mcp = { h: crypto.createHash('sha256').update(token).digest('hex'), created: Date.now() };
+    try { await saveDb(); } catch { return json(res, 503, { error: 'could not save, try again' }); }
+    audit(req, 'account.mcp-token.create', { user });
+    json(res, 200, { token, created: user.mcp.created });
+  },
+  'DELETE /api/account/mcp-token': async (req, res) => {
+    const user = readSession(req);
+    if (!user) return json(res, 401, { error: 'not signed in' });
+    delete user.mcp;
+    try { await saveDb(); } catch { return json(res, 503, { error: 'could not save, try again' }); }
+    audit(req, 'account.mcp-token.revoke', { user });
+    json(res, 200, { ok: true });
   },
 
   // Mobile app pairing: called from an already signed-in browser tab (Settings → "Pair the

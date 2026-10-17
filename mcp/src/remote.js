@@ -3,19 +3,15 @@
    a Response, so it runs inside a Netlify Function (api/netlify/functions/mcp.mjs) or any other
    fetch-style host. Read-only, same tools as the stdio server, answering from MongoDB.
 
-   Auth: a long secret in MCP_TOKEN. It is accepted in the URL (/mcp/<token>), because ChatGPT's
-   connector form has no header field for "no authentication" servers, or as a Bearer header. With
-   MCP_TOKEN unset or shorter than 24 characters the endpoint does not exist (404). Each request is
-   stateless: a fresh server and transport, so nothing is kept between calls but the MongoDB
-   connection. */
-import crypto from 'node:crypto'
+   Auth: a per-profile token made in the app (Settings → Account → AI assistants), accepted in the
+   URL (/mcp/<token>) or as `Authorization: Bearer <token>`. Revoking it there stops it working on
+   the next request. Each request is stateless: a fresh server and transport. The state cache holds
+   one profile at a time, so requests are served one after another. */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
-import { initAsync, init } from './state.js'
+import { connectMongo, uidForMcpToken, selectUser } from './state.js'
 import { registerTools } from './register.js'
 
-const sha = s => crypto.createHash('sha256').update(String(s)).digest()
-const same = (a, b) => crypto.timingSafeEqual(sha(a), sha(b))
 const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 
 function tokenOf(req, url) {
@@ -25,23 +21,25 @@ function tokenOf(req, url) {
   return /^Bearer /i.test(h) ? h.slice(7).trim() : ''
 }
 
-export async function handleMcp(req, env = process.env) {
-  const secret = (env.MCP_TOKEN || '').trim()
-  if (secret.length < 24) return new Response('Not found', { status: 404 })
+let turn = Promise.resolve()
+
+export async function handleMcp(req) {
   const url = new URL(req.url)
-  if (!same(tokenOf(req, url), secret)) return json(401, { error: 'unauthorized' })
-
-  try {
-    await initAsync()   // connects on the first request of an instance, then a no-op
-    init()
-  } catch (e) {
-    console.error('[opengym-mcp]', e.message)
-    return json(503, { error: 'storage unavailable' })
-  }
-
-  const server = new McpServer({ name: 'opengym', version: '0.1.0' })
-  registerTools(server)
-  const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })
-  await server.connect(transport)
-  return transport.handleRequest(req)
+  const token = tokenOf(req, url)
+  const run = turn.then(async () => {
+    try { await connectMongo() } catch (e) {
+      console.error('[opengym-mcp]', e.message)
+      return json(503, { error: 'storage unavailable' })
+    }
+    const uid = await uidForMcpToken(token)
+    if (!uid) return json(401, { error: 'unauthorized' })
+    await selectUser(uid)
+    const server = new McpServer({ name: 'opengym', version: '0.1.0' })
+    registerTools(server)
+    const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })
+    await server.connect(transport)
+    return transport.handleRequest(req)
+  })
+  turn = run.catch(() => {})
+  return run
 }
