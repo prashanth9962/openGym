@@ -1,16 +1,18 @@
 # openGym on Netlify: the frontend as static files, the API as a function (api/netlify/functions),
 # MongoDB for the data. Setup and limits: docs/SERVERLESS.md
 [build]
-  command = "cd api && npm ci --omit=optional && cd ../mcp && npm ci && cd ../frontend && npm ci && VITE_IMG_BASE=https://cdn.jsdelivr.net/gh/hasaneyldrm/exercises-dataset@7455efae41b330c265e7cd4b78dfa848e7ce5ebd/images/ VITE_GIF_BASE=https://cdn.jsdelivr.net/gh/hasaneyldrm/exercises-dataset@7455efae41b330c265e7cd4b78dfa848e7ce5ebd/videos/ npm run build"
+  command = "cd api && npm ci --omit=optional && npm install --no-save --omit=optional @modelcontextprotocol/sdk@1.30.0 zod@3.25.76 && cd ../frontend && npm ci && VITE_IMG_BASE=https://cdn.jsdelivr.net/gh/hasaneyldrm/exercises-dataset@7455efae41b330c265e7cd4b78dfa848e7ce5ebd/images/ VITE_GIF_BASE=https://cdn.jsdelivr.net/gh/hasaneyldrm/exercises-dataset@7455efae41b330c265e7cd4b78dfa848e7ce5ebd/videos/ npm run build"
   publish = "frontend/dist"
 
 [build.environment]
   NODE_VERSION = "22"
 
+# The remote MCP function (mcp.mjs) needs the MCP SDK and zod. They are installed next to the API's
+# own packages at build time (--no-save: api/package.json stays as it is) and shipped as externals.
 [functions]
   directory = "api/netlify/functions"
   node_bundler = "esbuild"
-  external_node_modules = ["mongodb", "@simplewebauthn/server", "web-push", "undici", "@anthropic-ai/claude-agent-sdk"]
+  external_node_modules = ["mongodb", "@modelcontextprotocol/sdk", "zod", "@simplewebauthn/server", "web-push", "undici", "@anthropic-ai/claude-agent-sdk"]
 
 # single-page app: every other path serves the app (the /api/* function takes precedence)
 [[redirects]]
