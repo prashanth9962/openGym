@@ -50,4 +50,17 @@ describe('remote MCP', () => {
     _setMcpHashForTests(crypto.createHash('sha256').update(TOKEN).digest('hex'))
     expect((await handleMcp(rpc('/mcp/' + TOKEN, INIT))).status).toBe(200)
   })
+
+  test('a peppered hash only matches while MCP_PEPPER is set to the same value', async () => {
+    const pepper = 'pepper-pepper-pepper-123'
+    _setMcpHashForTests(crypto.createHmac('sha256', pepper).update(TOKEN).digest('hex'), true)
+    expect((await handleMcp(rpc('/mcp/' + TOKEN, INIT))).status).toBe(401)   // no pepper in the environment
+    process.env.MCP_PEPPER = pepper
+    try {
+      expect((await handleMcp(rpc('/mcp/' + TOKEN, INIT))).status).toBe(200)
+      process.env.MCP_PEPPER = 'a-different-pepper-value'
+      expect((await handleMcp(rpc('/mcp/' + TOKEN, INIT))).status).toBe(401)
+    } finally { delete process.env.MCP_PEPPER }
+    _setMcpHashForTests(crypto.createHash('sha256').update(TOKEN).digest('hex'))
+  })
 })

@@ -54,10 +54,13 @@ running. So in this mode:
 
 The same read-only tools as `mcp/` (routines, workouts, 1RM, muscle balance…) are served over
 Streamable HTTP at `/mcp`, for clients that cannot start a local process. No environment variable
-is needed beyond `MONGODB_URI`.
+is needed beyond `MONGODB_URI`, but set `MCP_PEPPER` (a random string of 16+ characters,
+`openssl rand -hex 24`) as well: it keys the token's hash, so a copy of the database alone cannot be
+used to check guesses. Set it before making a token; if it is later removed or changed, existing tokens
+stop working and you make a new one.
 
 1. Sign in, then Settings → Account → **AI assistants (MCP)** → **Make a token**. It is shown once:
-   copy it. Only its SHA-256 is stored on your profile in MongoDB.
+   copy it. Only a keyed hash of it is stored on your profile in MongoDB.
 2. In ChatGPT (custom connector / developer mode), if the form has a field for a token or API key,
    use `https://<your-site>/mcp` and paste the token there (sent as `Authorization: Bearer <token>`).
    If it only offers "no authentication", use `https://<your-site>/mcp/<token>` instead.

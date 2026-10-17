@@ -172,6 +172,11 @@ const isAdmin = user => !!user && (user.admin === true || ADMIN_UIDS.includes(us
 // way: loadDb falls back to it. A copy of the version being replaced, as it used to be, lost
 // whatever the last save wrote (a profile just created) when db.json was later found unreadable.
 // A write cut short leaves the previous db.json.bak whole (temporary file and rename).
+// The remote MCP token's one-way hash (see 'POST /api/account/mcp-token'); mcp/src/state.js does the same.
+const mcpPepper = () => { const p = String(process.env.MCP_PEPPER || '').trim(); return p.length >= 16 ? p : ''; };
+const mcpHash = (token, pepper) => pepper
+  ? crypto.createHmac('sha256', pepper).update(token).digest('hex')
+  : crypto.createHash('sha256').update(token).digest('hex');
 function saveDb() {
   const text = JSON.stringify(db, null, 2);
   // Files: written on the spot, as ever. MongoDB: the write is in flight when this returns; a
@@ -2112,6 +2117,9 @@ const routes = {
   // enough and the database never holds a usable credential. One token per profile: making a new
   // one replaces the old, and revoking removes it. The MCP server reads the hash from the same
   // `db` document and applies the same one-way function (mcp/src/state.js).
+  // `MCP_PEPPER` (16+ characters, a Netlify variable, not in the database) keys the hash, so a copy
+  // of the database alone cannot even be used to test guesses. `p` marks a hash made with it; if the
+  // variable is later removed or changed those tokens stop working, and a new one is made.
   'GET /api/account/mcp-token': async (req, res) => {
     const user = readSession(req);
     if (!user) return json(res, 401, { error: 'not signed in' });
@@ -2121,7 +2129,8 @@ const routes = {
     const user = readSession(req);
     if (!user) return json(res, 401, { error: 'not signed in' });
     const token = 'ogm_' + crypto.randomBytes(24).toString('base64url');
-    user.mcp = { h: crypto.createHash('sha256').update(token).digest('hex'), created: Date.now() };
+    const pepper = mcpPepper();
+    user.mcp = { h: mcpHash(token, pepper), ...(pepper ? { p: 1 } : {}), created: Date.now() };
     try { await saveDb(); } catch { return json(res, 503, { error: 'could not save, try again' }); }
     audit(req, 'account.mcp-token.create', { user });
     json(res, 200, { token, created: user.mcp.created });

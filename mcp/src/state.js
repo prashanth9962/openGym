@@ -57,17 +57,25 @@ export async function initAsync() {
 
 // The remote transport serves whichever profile the request's token belongs to. The token is made
 // in Settings (api/server.js, POST /api/account/mcp-token); only its SHA-256 is stored, as
-// user.mcp.h on the profile in the `db` document. Returns the user id, or null for an unknown or
+// user.mcp.h on the profile in the `db` document (an HMAC keyed by MCP_PEPPER when user.mcp.p). Returns the user id, or null for an unknown or
 // revoked token. Reads the db document afresh so a revoke takes effect on the next request.
 export async function uidForMcpToken(token) {
   if (!token) return null
   if (_col) _db = (await mongoDoc('db')) || _db
-  const want = Buffer.from(crypto.createHash('sha256').update(String(token)).digest('hex'))
+  const pep = String(process.env.MCP_PEPPER || '').trim()
+  const pepper = pep.length >= 16 ? pep : ''
+  const hash = (t, peppered) => (peppered
+    ? crypto.createHmac('sha256', pepper).update(t).digest('hex')
+    : crypto.createHash('sha256').update(t).digest('hex'))
+  const plain = Buffer.from(hash(String(token), false))
+  const keyed = pepper ? Buffer.from(hash(String(token), true)) : null
   let found = null
   for (const u of (_db?.users || [])) {
+    // a hash made with the pepper can only be checked with it; without it the token just fails
+    const want = u.mcp?.p ? keyed : plain
     const h = Buffer.from(String(u.mcp?.h || ''))
     // no early exit: every profile is compared, so the time does not say which one matched
-    if (h.length === want.length && crypto.timingSafeEqual(h, want) && !u.disabled) found = u.id
+    if (want && h.length === want.length && crypto.timingSafeEqual(h, want) && !u.disabled) found = u.id
   }
   return found
 }
@@ -238,7 +246,7 @@ export function _seedStateForTests(state) {
   if (_watcher) { _watcher.close(); _watcher = null }
 }
 
-export function _setMcpHashForTests(h) { _db.users[0].mcp = { h, created: 1 } }
+export function _setMcpHashForTests(h, p) { _db.users[0].mcp = h === undefined ? undefined : { h, ...(p ? { p: 1 } : {}), created: 1 } }
 
 function defaultsShape() {
   return {

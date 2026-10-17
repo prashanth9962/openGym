@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { boundPort } from './helpers.mjs';
 
 const API = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+const PEPPER = 'test-pepper-0123456789';
 const SECRET = crypto.randomBytes(32).toString('hex');
 const mintSession = uid => {
   const payload = `${uid}:${Date.now() + 86400000}:0`;
@@ -25,7 +26,7 @@ test('mcp token: create, status, replace, revoke', async t => {
   }));
   const child = spawn(process.execPath, ['server.js'], {
     cwd: API, stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, PORT: '0', DATA_DIR: dataDir, ORIGIN: 'http://localhost:8080', RP_ID: 'localhost' }
+    env: { ...process.env, PORT: '0', DATA_DIR: dataDir, ORIGIN: 'http://localhost:8080', RP_ID: 'localhost', MCP_PEPPER: PEPPER }
   });
   let log = '';
   child.stdout.on('data', d => log += d);
@@ -42,13 +43,14 @@ test('mcp token: create, status, replace, revoke', async t => {
 
   const a = (await go('POST')).body;
   assert.match(a.token, /^ogm_[A-Za-z0-9_-]{32}$/);
-  assert.equal(stored().h, crypto.createHash('sha256').update(a.token).digest('hex'));
+  assert.equal(stored().h, crypto.createHmac('sha256', PEPPER).update(a.token).digest('hex'), 'keyed by the pepper');
+  assert.equal(stored().p, 1);
   assert.ok(!fs.readFileSync(path.join(dataDir, 'db.json'), 'utf8').includes(a.token), 'the token itself is never stored');
   assert.deepEqual((await go('GET')).body, { on: true, created: a.created });
 
   const b = (await go('POST')).body;
   assert.notEqual(b.token, a.token);
-  assert.equal(stored().h, crypto.createHash('sha256').update(b.token).digest('hex'), 'a new token replaces the old');
+  assert.equal(stored().h, crypto.createHmac('sha256', PEPPER).update(b.token).digest('hex'), 'a new token replaces the old');
 
   assert.equal((await go('DELETE')).status, 200);
   assert.equal(stored(), undefined);
