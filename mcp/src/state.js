@@ -57,12 +57,12 @@ export async function initAsync() {
 
 // The remote transport serves whichever profile the request's token belongs to. The token is made
 // in Settings (api/server.js, POST /api/account/mcp-token); only its SHA-256 is stored, as
-// user.mcp.h on the profile in the `db` document (an HMAC keyed by MCP_PEPPER when user.mcp.p). Returns the user id, or null for an unknown or
+// user.mcp.h on the profile in the `db` document (an HMAC keyed by MCP_SECRET when user.mcp.p). Returns the user id, or null for an unknown or
 // revoked token. Reads the db document afresh so a revoke takes effect on the next request.
 export async function uidForMcpToken(token) {
   if (!token) return null
   if (_col) _db = (await mongoDoc('db')) || _db
-  const pep = String(process.env.MCP_PEPPER || '').trim()
+  const pep = String(process.env.MCP_SECRET || '').trim()
   const pepper = pep.length >= 16 ? pep : ''
   const hash = (t, peppered) => (peppered
     ? crypto.createHmac('sha256', pepper).update(t).digest('hex')

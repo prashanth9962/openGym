@@ -26,7 +26,7 @@ test('mcp token: create, status, replace, revoke', async t => {
   }));
   const child = spawn(process.execPath, ['server.js'], {
     cwd: API, stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, PORT: '0', DATA_DIR: dataDir, ORIGIN: 'http://localhost:8080', RP_ID: 'localhost', MCP_PEPPER: PEPPER }
+    env: { ...process.env, PORT: '0', DATA_DIR: dataDir, ORIGIN: 'http://localhost:8080', RP_ID: 'localhost', MCP_SECRET: PEPPER }
   });
   let log = '';
   child.stdout.on('data', d => log += d);

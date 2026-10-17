@@ -173,7 +173,7 @@ const isAdmin = user => !!user && (user.admin === true || ADMIN_UIDS.includes(us
 // whatever the last save wrote (a profile just created) when db.json was later found unreadable.
 // A write cut short leaves the previous db.json.bak whole (temporary file and rename).
 // The remote MCP token's one-way hash (see 'POST /api/account/mcp-token'); mcp/src/state.js does the same.
-const mcpPepper = () => { const p = String(process.env.MCP_PEPPER || '').trim(); return p.length >= 16 ? p : ''; };
+const mcpPepper = () => { const p = String(process.env.MCP_SECRET || '').trim(); return p.length >= 16 ? p : ''; };
 const mcpHash = (token, pepper) => pepper
   ? crypto.createHmac('sha256', pepper).update(token).digest('hex')
   : crypto.createHash('sha256').update(token).digest('hex');
@@ -2117,7 +2117,7 @@ const routes = {
   // enough and the database never holds a usable credential. One token per profile: making a new
   // one replaces the old, and revoking removes it. The MCP server reads the hash from the same
   // `db` document and applies the same one-way function (mcp/src/state.js).
-  // `MCP_PEPPER` (16+ characters, a Netlify variable, not in the database) keys the hash, so a copy
+  // `MCP_SECRET` (16+ characters, a Netlify variable, not in the database) keys the hash, so a copy
   // of the database alone cannot even be used to test guesses. `p` marks a hash made with it; if the
   // variable is later removed or changed those tokens stop working, and a new one is made.
   'GET /api/account/mcp-token': async (req, res) => {

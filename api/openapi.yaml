@@ -564,7 +564,7 @@ paths:
       description: |
         For LLM clients that cannot run a local process (ChatGPT's custom connectors). The token
         opens the read-only MCP endpoint `/mcp/<token>` (or `/mcp` with `Authorization: Bearer
-        <token>`) for this profile. It is returned once; only a hash is stored (keyed by `MCP_PEPPER` when set).
+        <token>`) for this profile. It is returned once; only a hash is stored (keyed by `MCP_SECRET` when set).
       responses:
         '200':
           description: The new token, shown once.

@@ -54,7 +54,7 @@ running. So in this mode:
 
 The same read-only tools as `mcp/` (routines, workouts, 1RM, muscle balance…) are served over
 Streamable HTTP at `/mcp`, for clients that cannot start a local process. No environment variable
-is needed beyond `MONGODB_URI`, but set `MCP_PEPPER` (a random string of 16+ characters,
+is needed beyond `MONGODB_URI`, but set `MCP_SECRET` (a random string of 16+ characters,
 `openssl rand -hex 24`) as well: it keys the token's hash, so a copy of the database alone cannot be
 used to check guesses. Set it before making a token; if it is later removed or changed, existing tokens
 stop working and you make a new one.
