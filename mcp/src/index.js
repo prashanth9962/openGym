@@ -4,8 +4,8 @@
    No extra container, no new outbound network — your data stays in a folder you control. */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
-import { TOOLS } from './tools.js'
-import { init, initAsync, refresh, getUser } from './state.js'
+import { registerTools } from './register.js'
+import { init, initAsync, getUser } from './state.js'
 
 const server = new McpServer({
   name: 'opengym',
@@ -26,26 +26,7 @@ try {
   // env and restarting.
 }
 
-for (const t of TOOLS) {
-  server.tool(
-    t.name,
-    t.description,
-    t.schema,
-    async (params) => {
-      try {
-        await refresh()
-        const result = t.handler(params || {})
-        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }
-      } catch (err) {
-        const code = err.code || 'ERROR'
-        return {
-          isError: true,
-          content: [{ type: 'text', text: `${code}: ${err.message}` }]
-        }
-      }
-    }
-  )
-}
+registerTools(server)
 
 const transport = new StdioServerTransport()
 await server.connect(transport)

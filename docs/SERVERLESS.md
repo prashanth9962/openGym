@@ -50,6 +50,20 @@ running. So in this mode:
 4. Deploy, open the site, create your profile. Use a custom domain if you want a stable `RP_ID`
    (a `*.netlify.app` name works too, as long as you never rename the site).
 
+## Remote MCP (ChatGPT and other cloud clients)
+
+The same read-only tools as `mcp/` (routines, workouts, 1RM, muscle balance…) are served over
+Streamable HTTP at `/mcp/<MCP_TOKEN>`, for clients that cannot start a local process.
+
+1. Set `MCP_TOKEN` in Netlify: a random string of 24+ characters (`openssl rand -hex 24`). Without it
+   the endpoint answers 404. Redeploy.
+2. In ChatGPT (custom connector / developer mode), add the URL `https://<your-site>/mcp/<MCP_TOKEN>`
+   with no authentication. Clients that can send headers may use `https://<your-site>/mcp` with
+   `Authorization: Bearer <MCP_TOKEN>` instead.
+
+The token is the only protection: anyone holding the URL can read your training data, and a URL
+can end up in logs or screenshots. Rotate it by changing the variable. The tools never write.
+
 ## Moving data from a Docker install
 
 Start the Docker stack once with `MONGODB_URI` pointing at the same Atlas database

@@ -72,6 +72,9 @@ For Cursor and other MCP-compatible clients, see the client's MCP docs — the s
 Restart the client; you should see the openGym tools appear with "serving profile \<name\>" on
 the server's stderr.
 
+**ChatGPT or another cloud client?** They cannot spawn a local process. The Netlify deployment serves
+the same tools over HTTP at `/mcp/<MCP_TOKEN>` (`mcp/src/remote.js`); see docs/SERVERLESS.md.
+
 ## Tools
 
 Nine read-only tools in v1:
