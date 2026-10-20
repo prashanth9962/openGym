@@ -73,8 +73,9 @@ Restart the client; you should see the openGym tools appear with "serving profil
 the server's stderr.
 
 **ChatGPT or another cloud client?** They cannot spawn a local process. The Netlify deployment serves
-the same tools over HTTP at `/mcp` (`mcp/src/remote.js`), with a token you make in Settings → Account;
-see docs/SERVERLESS.md.
+the same tools over HTTP at `/mcp` (`mcp/src/remote.js`), with a token you make in Settings → Account,
+plus five tools that change the profile (`log_workout`, `log_bodyweight`, `save_routine`,
+`set_week_plan`, `set_day_override`); see docs/SERVERLESS.md. The stdio server stays read-only.
 
 ## Tools
 

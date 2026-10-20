@@ -1,7 +1,8 @@
 /* openGym MCP server — remote (Streamable HTTP) transport, for clients that cannot spawn a local
    process, such as ChatGPT's custom connectors. handleMcp takes a web-standard Request and returns
    a Response, so it runs inside a Netlify Function (api/netlify/functions/mcp.mjs) or any other
-   fetch-style host. Read-only, same tools as the stdio server, answering from MongoDB.
+   fetch-style host. The same read tools as the stdio server, answering from MongoDB, plus the tools that change the
+   profile (write-tools.js), which save through the app's API.
 
    Auth: a per-profile token made in the app (Settings → Account → AI assistants), accepted in the
    URL (/mcp/<token>) or as `Authorization: Bearer <token>`. Revoking it there stops it working on
@@ -10,7 +11,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
 import { connectMongo, uidForMcpToken, selectUser } from './state.js'
-import { registerTools } from './register.js'
+import { registerTools, registerWriteTools } from './register.js'
+import { changeProfile } from './write.js'
 
 const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 
@@ -36,6 +38,7 @@ export async function handleMcp(req) {
     await selectUser(uid)
     const server = new McpServer({ name: 'opengym', version: '0.1.0' })
     registerTools(server)
+    registerWriteTools(server, mutate => changeProfile(url.origin, token, mutate))
     const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })
     await server.connect(transport)
     return transport.handleRequest(req)

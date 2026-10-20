@@ -55,4 +55,30 @@ test('mcp token: create, status, replace, revoke', async t => {
   assert.equal((await go('DELETE')).status, 200);
   assert.equal(stored(), undefined);
   assert.deepEqual((await go('GET')).body, { on: false, created: null });
+
+  // The token as a bearer: the data routes, and only those.
+  const c = (await go('POST')).body;
+  const bearer = { Authorization: 'Bearer ' + c.token, 'Content-Type': 'application/json' };
+  const root = base.replace('/account/mcp-token', '');
+  assert.equal((await fetch(root + '/data', { headers: bearer })).status, 200);
+  assert.equal((await fetch(root + '/data/rev', { headers: bearer })).status, 200);
+  const put = await fetch(root + '/data', { method: 'PUT', headers: bearer, body: JSON.stringify({ state: { routines: [], workouts: [], bodyweight: [{ d: '2030-01-01', w: 80 }] }, baseRev: 0 }) });
+  assert.equal(put.status, 200);
+  assert.equal((await fetch(root + '/me', { headers: bearer })).status, 401, 'not a session for anything else');
+  assert.equal((await fetch(base, { method: 'POST', headers: bearer })).status, 401, 'cannot mint tokens');
+  assert.equal((await fetch(root + '/data', { headers: { ...bearer, Authorization: 'Bearer ogm_wrongwrongwrongwrongwrongwrong1' } })).status, 401);
+
+  // The MCP write tools through the real API, end to end (skipped without the mcp/ packages).
+  let write, tools;
+  try { write = await import('../../mcp/src/write.js'); tools = await import('../../mcp/src/write-tools.js'); } catch { return; }
+  const origin = new URL(base).origin;
+  const logW = tools.WRITE_TOOLS.find(t => t.name === 'log_workout');
+  const exId = '0001';
+  const out = await write.changeProfile(origin, c.token, S => logW.mutate(S, { date: '2030-02-03', exercises: [{ exercise: exId, sets: [{ weight: 60, reps: 5 }] }] }));
+  assert.equal(out.saved, true);
+  const doc = JSON.parse(fs.readFileSync(path.join(dataDir, 'state-u_mcp_1.json'), 'utf8'));
+  assert.equal(doc.workouts.length, 1);
+  assert.equal(doc.workouts[0].d, '2030-02-03');
+  assert.equal(doc.bodyweight.length, 1, 'what was already there is kept');
+  assert.ok(doc._rev >= 2 && doc._wid, 'the server stamped the write');
 });

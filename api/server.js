@@ -622,7 +622,28 @@ function cookieToken(req) {
 }
 // The session behind a request: { user, exp, bearer } — `bearer` when it came in an Authorization
 // header (a paired phone) rather than the cookie — or null for no valid session at all.
+// A remote-MCP token (made in Settings, see 'POST /api/account/mcp-token') stands in for a session on
+// the three routes the MCP server reads and writes the profile through, and on nothing else: it
+// cannot reach the account, passkey, admin or token routes.
+const MCP_ROUTES = new Set(['GET /api/data', 'PUT /api/data', 'GET /api/data/rev']);
+function mcpSessionOf(req, auth) {
+  if (!auth.startsWith('Bearer ogm_')) return null;
+  if (!MCP_ROUTES.has(req.method + ' ' + String(req.url).split('?')[0])) return null;
+  const tok = auth.slice(7).trim();
+  const plain = Buffer.from(mcpHash(tok, ''));
+  const pepper = mcpPepper();
+  const keyed = pepper ? Buffer.from(mcpHash(tok, pepper)) : null;
+  let user = null;
+  for (const u of db.users) {
+    const want = u.mcp?.p ? keyed : plain;
+    const h = Buffer.from(String(u.mcp?.h || ''));
+    if (want && h.length === want.length && crypto.timingSafeEqual(h, want) && !u.disabled) user = u;
+  }
+  return user ? { user, exp: Date.now() + 3600000, bearer: true } : null;
+}
 function sessionOf(req) {
+  const mcp = mcpSessionOf(req, req.headers.authorization || '');
+  if (mcp) return mcp;
   // The paired mobile app has no cookie jar shared with the API's origin, so it carries the same
   // signed token in an Authorization header instead — same payload, same verification below.
   const auth = req.headers.authorization || '';

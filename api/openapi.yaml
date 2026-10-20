@@ -563,8 +563,9 @@ paths:
       summary: Make a remote MCP token (replaces the previous one)
       description: |
         For LLM clients that cannot run a local process (ChatGPT's custom connectors). The token
-        opens the read-only MCP endpoint `/mcp/<token>` (or `/mcp` with `Authorization: Bearer
-        <token>`) for this profile. It is returned once; only a hash is stored (keyed by `MCP_SECRET` when set).
+        opens the MCP endpoint `/mcp/<token>` (or `/mcp` with `Authorization: Bearer
+        <token>`) for this profile, to read it and to change it (log workouts and weigh-ins, edit routines,
+        plan the week). As a bearer it is also accepted on GET/PUT /api/data and GET /api/data/rev, and nowhere else. It is returned once; only a hash is stored (keyed by `MCP_SECRET` when set).
       responses:
         '200':
           description: The new token, shown once.

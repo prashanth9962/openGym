@@ -34,6 +34,7 @@ describe('remote MCP', () => {
       const names = (await res.json()).result.tools.map(t => t.name)
       expect(names).toContain('list_routines')
       expect(names).toContain('estimate_1rm')
+      expect(names).toEqual(expect.arrayContaining(['log_workout', 'log_bodyweight', 'save_routine', 'set_week_plan', 'set_day_override']))
     }
   })
 

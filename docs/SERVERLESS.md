@@ -52,7 +52,7 @@ running. So in this mode:
 
 ## Remote MCP (ChatGPT and other cloud clients)
 
-The same read-only tools as `mcp/` (routines, workouts, 1RM, muscle balance…) are served over
+The same tools as `mcp/` (routines, workouts, 1RM, muscle balance…) are served over
 Streamable HTTP at `/mcp`, for clients that cannot start a local process. No environment variable
 is needed beyond `MONGODB_URI`, but set `MCP_SECRET` (a random string of 16+ characters,
 `openssl rand -hex 24`) as well: it keys the token's hash, so a copy of the database alone cannot be
@@ -66,9 +66,14 @@ stop working and you make a new one.
    If it only offers "no authentication", use `https://<your-site>/mcp/<token>` instead.
 
 Each profile has its own token and sees only its own data. Making a new token replaces the old one;
-Revoke in the same screen stops it at once. Anyone holding the token can read your training data,
+Revoke in the same screen stops it at once. Anyone holding the token can read and change your training data,
 and a URL can end up in logs or screenshots, so prefer the header form when the client allows it.
-The tools never write.
+
+Besides the read tools it has five that change the profile: `log_workout` (a finished session, filed on
+its date with PR badges), `log_bodyweight`, `save_routine` (create or edit), `set_week_plan` and
+`set_day_override`. Nothing it offers deletes a workout, a weigh-in or a routine. The changes are
+saved through the app's own API, with the same conflict handling, so a phone that logged something
+meanwhile is merged with, not overwritten. The local stdio server in `mcp/` stays read-only.
 
 ## Moving data from a Docker install
 

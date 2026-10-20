@@ -1,5 +1,5 @@
 // Settings → Account → AI assistants: the token that lets an LLM client without a local process
-// (ChatGPT's custom connectors) read this profile through the remote MCP endpoint, /mcp. The
+// (ChatGPT's custom connectors) read and update this profile through the remote MCP endpoint, /mcp. The
 // server makes it (api/server.js, POST /api/account/mcp-token), keeps only its hash, and shows it
 // here once; making a new one replaces the old, revoking removes it.
 import { useEffect, useState } from 'react'
@@ -17,7 +17,7 @@ const mcpUrl = token => `${location.origin}/mcp/${token}`
 
 export function McpTokenRow() {
   return <Row icon="key" iconTint="var(--indigo)" title={t('AI assistants (MCP)')} accessory="chevron"
-    subtitle={t('Let ChatGPT or another AI app read your training data. Read-only.')}
+    subtitle={t('Let ChatGPT or another AI app read and update your training data.')}
     onClick={() => ui().openSheet(close => <McpTokenSheet close={close} />)} />
 }
 
@@ -38,7 +38,7 @@ export function McpTokenSheet({ close }) {
   return <>
     <h3>{t('AI assistants (MCP)')}</h3>
     <div className="muted small" style={{ marginBottom: 14 }}>
-      {t('A token lets an AI app that cannot run on your computer, such as ChatGPT, read your routines, workouts, body weight and 1RMs. It cannot change anything. Anyone who has the token can read your data, so keep it private.')}
+      {t('A token lets an AI app that cannot run on your computer, such as ChatGPT, read your routines, workouts, body weight and 1RMs, and log workouts and weigh-ins, edit routines and plan your week. It cannot delete anything. Anyone who has the token can read and change your data, so keep it private.')}
     </div>
     {!st ? <div className="muted small">{err || '…'}</div> : fresh ? <>
       <div className="small" style={{ marginBottom: 8 }}>{t('Copy it now. It is shown only once.')}</div>

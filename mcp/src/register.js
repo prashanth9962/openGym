@@ -2,6 +2,7 @@
    the remote HTTP one (remote.js), so both answer from the same handlers. */
 import { TOOLS } from './tools.js'
 import { refresh } from './state.js'
+import { WRITE_TOOLS } from './write-tools.js'
 
 export function registerTools(server) {
   for (const t of TOOLS) {
@@ -23,5 +24,20 @@ export function registerTools(server) {
         }
       }
     )
+  }
+}
+
+// The tools that change the profile. `save(mutate)` applies one to the stored document and says
+// what happened; it is only handed over by the remote transport, so stdio stays read-only.
+export function registerWriteTools(server, save) {
+  for (const t of WRITE_TOOLS) {
+    server.tool(t.name, t.description, t.schema, async (params) => {
+      try {
+        const result = await save(S => t.mutate(S, params || {}))
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }
+      } catch (err) {
+        return { isError: true, content: [{ type: 'text', text: `${err.code || 'ERROR'}: ${err.message}` }] }
+      }
+    })
   }
 }
