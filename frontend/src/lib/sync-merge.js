@@ -29,6 +29,8 @@
  *     its neighbour there (unionByNeighbours); of an id that both have, the version
  *     edited last by its own `_ts` (stampRoutines), the newer copy's on a tie
  *   - bodyweight: union by day, the later-edited (`t`) entry of a day that both have
+ *   - food (the food log, lib/food.js): every entry either copy has, minus what either removed after
+ *     it was last edited; of an entry both have, the later-edited one
  *   - favEx: ordered set union, the newer copy first
  *   - exWeights: union by exercise, the better `w` for that exercise — larger for an ordinary
  *     lift, smaller on an assistance machine (a PR logged on the other device must not be
@@ -76,6 +78,7 @@ import { beatsWeight } from './exercises.js'
 import { bestWeightForEntry } from './history.js'
 import { convertStateUnit, convertBodyWeight } from './units.js'
 import { sanitizeAccent } from './accent.js'
+import { mergeFood, foodSince } from './food.js'
 
 const clone = o => JSON.parse(JSON.stringify(o))
 const list = v => (Array.isArray(v) ? v : [])
@@ -469,6 +472,7 @@ export function sinceReset(S, at, ids) {
     }
   }
   out.exWeights = ex
+  if (out.food) out.food = foodSince(out.food, at)
   // The reset copy's settings, plan and unit win whatever this copy's own stamps say (the file's
   // header): stamps from before the reset would otherwise outrank the fresh profile's defaults,
   // a unit switch made long ago would bring the old unit back over the reset's.
@@ -811,6 +815,8 @@ export function mergeStates(a0, b0, { prefer } = {}) {
     }
   }
   out.bodyweight = mergeBodyweight(n.bodyweight, o.bodyweight).map(clone)
+  // The food log has its own rule (lib/food.js): without it the newer copy would take it whole.
+  if (n.food || o.food) out.food = mergeFood(n.food, o.food)
   if (list(n.favEx).length || list(o.favEx).length) out.favEx = [...new Set([...list(n.favEx), ...list(o.favEx)])]
   // What either device removed stays removed (the `deleted` section above). A workout taken out
   // this way leaves its exercises' kept loads to be read again, as an edit of it would: from the

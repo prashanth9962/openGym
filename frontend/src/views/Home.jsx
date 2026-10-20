@@ -14,6 +14,7 @@ import { useConnectionTrouble } from '../components/SyncBanner.jsx'
 import { Button } from '../components/ui.jsx'
 import { tappable } from '../lib/use-sheet-keyboard.js'
 import { glyphOf } from '../lib/glyphs.js'
+import { normalizeFood, entriesOn, dayTotals } from '../lib/food.js'
 
 // Home = what to do now + a quick glance. Deep charts & history live in Stats.
 export default function Home() {
@@ -184,6 +185,15 @@ export default function Home() {
         <div style={{ height: 8 }} /><Button onClick={() => nav('/plan')}>{t('Build my own plan')}</Button>
       </div>
     )}
+
+    <div className="card row between" style={{ alignItems: 'center', gap: 12 }}>
+      <div style={{ minWidth: 0 }}><h2 style={{ margin: 0 }}>{t('Food')}</h2>
+        <div className="muted small" style={{ marginTop: 4 }}>{(() => {
+          const f = normalizeFood(S.food), tot = dayTotals(entriesOn(f, todayISO()))
+          return tot.count ? `${fmtNum(tot.kcal)}${f.targets?.kcal ? ' / ' + fmtNum(f.targets.kcal) : ''} kcal · P ${fmtNum(tot.p)} g` : t('Log what you eat, against daily targets.')
+        })()}</div></div>
+      <Button size="sm" variant="tinted" trailingIcon="chevronRight" style={{ flexShrink: 0 }} onClick={() => nav('/food')}>{t('Open')}</Button>
+    </div>
 
     {S.showWeightCard !== false && <div className="card">
       <div className="row between bw-head" style={{ marginBottom: 6 }}>
