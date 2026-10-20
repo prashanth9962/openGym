@@ -11,6 +11,7 @@ import {
 } from '../../frontend/src/lib/history.js'
 import { queueView, queueNext, pinState } from '../../frontend/src/lib/queue.js'
 import { exOr } from '../../frontend/src/lib/exercises.js'
+import { rankExercises, exerciseSummary } from './exercise-search.js'
 import { isWarmupRow } from '../../frontend/src/lib/workout-model.js'
 import {
   bestSetOf, best1RM, e1rmSeries, DEFAULT_FORMULA, REP_CAP
@@ -656,8 +657,23 @@ export const previewSession = {
 
 /* ---------- registration list ---------- */
 
+const searchExercisesTool = {
+  name: 'search_exercises',
+  description: 'Find exercises by name and get their ids, best match first. Use this before log_workout or save_routine: those take an exercise id (or an exact name), and a common name like "lat pulldown" matches many variants (cable, band, machine…). Narrow with equipment (cable, barbell, dumbbell, body weight, leverage machine, band…) and pick the one you mean.',
+  schema: {
+    query: z.string().min(1).max(80).describe('Name or words from it, e.g. "lat pulldown", "romanian deadlift"'),
+    equipment: z.string().max(40).optional().describe('Keep only this equipment, e.g. "cable"'),
+    body_part: z.string().max(40).optional().describe('Keep only this body part, e.g. "back"'),
+    limit: z.number().int().min(1).max(25).optional().describe('Default 10')
+  },
+  handler: ({ query, equipment, body_part, limit }) => {
+    const { total, results } = rankExercises(getState() || {}, query, { equipment, bodyPart: body_part, limit: limit || 10 })
+    return { matches: total, showing: results.length, exercises: results.map(exerciseSummary) }
+  }
+}
+
 export const TOOLS = [
-  listRoutines, getRoutine, previewSession, getWeekPlan, listWorkouts, getWorkout, getBodyweight, estimate1rm, muscleBalance
+  searchExercisesTool, listRoutines, getRoutine, previewSession, getWeekPlan, listWorkouts, getWorkout, getBodyweight, estimate1rm, muscleBalance
 ]
 
 function noState() {

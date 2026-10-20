@@ -3,8 +3,10 @@
 import { describe, test, expect, vi } from 'vitest'
 import { buildDemoState } from '../../frontend/src/lib/demoSeed.js'
 import { EXDB } from '../../frontend/src/lib/exercises.js'
+import { _seedStateForTests } from '../src/state.js'
 import { WRITE_TOOLS, resolveExercise } from '../src/write-tools.js'
 import { changeProfile } from '../src/write.js'
+import { TOOLS } from '../src/tools.js'
 
 const tool = n => WRITE_TOOLS.find(t => t.name === n)
 const fresh = () => { const s = buildDemoState(); s.unit = 'kg'; return s }
@@ -20,6 +22,22 @@ describe('resolveExercise', () => {
     try { resolveExercise(fresh(), 'press'); throw new Error('no throw') } catch (e) {
       expect(e.code).toBe('EAMBIGUOUS'); expect(e.message).toMatch(/\(id /)
     }
+  })
+})
+
+describe('search_exercises', () => {
+  const search = TOOLS.find(t => t.name === 'search_exercises').handler
+  test('ranks whole-word matches first and honours the equipment filter', () => {
+    _seedStateForTests(fresh())
+    const r = search({ query: 'lat pulldown' })
+    expect(r.exercises[0].name).toMatch(/\blat\b/)
+    expect(r.exercises.length).toBeLessThanOrEqual(10)
+    const cable = search({ query: 'lat pulldown', equipment: 'cable', limit: 25 })
+    expect(cable.exercises.every(e => e.equipment === 'cable')).toBe(true)
+    expect(search({ query: 'zzzqqqxxx' })).toMatchObject({ matches: 0, exercises: [] })
+  })
+  test('an ambiguous name in a write tool points at it', () => {
+    expect(() => resolveExercise(fresh(), 'lat pulldown')).toThrow(/search_exercises/)
   })
 })
 

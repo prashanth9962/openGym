@@ -7,8 +7,9 @@
    Workouts go in the way the app files one logged after the fact (backfill): the same builders,
    in date order, with the PR badges worked out against the history around them. */
 import { z } from 'zod'
+import { rankExercises } from './exercise-search.js'
 import { uid } from '../../frontend/src/lib/format.js'
-import { EXIDX, allExercises, searchExercises, isCardio } from '../../frontend/src/lib/exercises.js'
+import { EXIDX, allExercises, isCardio } from '../../frontend/src/lib/exercises.js'
 import { buildCompletedWorkout } from '../../frontend/src/lib/finish-workout.js'
 import { completeBackfill } from '../../frontend/src/lib/backfill.js'
 import { rebuildPrHistory } from '../../frontend/src/lib/workout-date.js'
@@ -37,11 +38,12 @@ export function resolveExercise(S, ref) {
   const norm = x => String(x || '').trim().toLowerCase()
   const exact = all.filter(e => norm(e.n) === norm(q))
   if (exact.length === 1) return exact[0]
-  const found = exact.length ? exact : searchExercises(all, q)
-  if (found.length === 1) return found[0]
-  if (!found.length) throw fail('ENOENT', `no exercise matches "${q}" — try a simpler name`)
-  const list = found.slice(0, 6).map(e => `${e.n} (id ${e.id})`).join('; ')
-  throw fail('EAMBIGUOUS', `"${q}" matches ${found.length} exercises: ${list}${found.length > 6 ? '; …' : ''}. Pass the id, or a fuller name.`)
+  const found = exact.length ? exact : rankExercises(S, q, { limit: 8 }).results
+  const total = exact.length || rankExercises(S, q, { limit: 1 }).total
+  if (total === 1) return found[0]
+  if (!found.length) throw fail('ENOENT', `no exercise matches "${q}" — try search_exercises with simpler words`)
+  const list = found.map(e => `${e.n} [${e.eq || '?'}] (id ${e.id})`).join('; ')
+  throw fail('EAMBIGUOUS', `"${q}" matches ${total} exercises. Best matches: ${list}${total > found.length ? '; …' : ''}. Call search_exercises to look them up, then pass the id of the one you mean.`)
 }
 
 const nameOf = ex => ex.n || ex.id
@@ -54,7 +56,7 @@ const setSchema = z.object({
   rpe: z.number().min(1).max(10).optional().describe('Optional effort, 1–10'),
 })
 const cfgSchema = z.object({
-  exercise: z.string().describe('Exercise name or id'),
+  exercise: z.string().describe('Exercise id from search_exercises (or an exact name)'),
   sets: z.number().int().min(1).max(20),
   reps: z.number().int().min(1).max(500),
   weight: z.number().min(0).max(1000).optional().describe("Starting load in the profile's unit"),
@@ -83,7 +85,7 @@ const logWorkout = {
     routine_id: z.string().optional().describe('The routine it followed, from list_routines'),
     duration_minutes: z.number().int().min(1).max(600).optional().describe('Defaults to 60'),
     note: z.string().max(500).optional(),
-    exercises: z.array(z.object({ exercise: z.string().describe('Exercise name or id'), sets: z.array(setSchema).min(1).max(30) })).min(1).max(30),
+    exercises: z.array(z.object({ exercise: z.string().describe('Exercise id from search_exercises (or an exact name)'), sets: z.array(setSchema).min(1).max(30) })).min(1).max(30),
   },
   mutate(S, p) {
     S.workouts = Array.isArray(S.workouts) ? S.workouts : []

@@ -79,10 +79,11 @@ plus five tools that change the profile (`log_workout`, `log_bodyweight`, `save_
 
 ## Tools
 
-Nine read-only tools in v1:
+Ten read-only tools:
 
 | Tool | What it answers |
 |---|---|
+| `search_exercises` | Which exercise id is "lat pulldown"? Ranked matches with equipment and body part; the write tools take these ids. |
 | `list_routines` | What routines are saved in my profile? (names + exercise counts) |
 | `get_routine` | What does the Push Day routine prescribe? (sets/reps/weight and rest per exercise) |
 | `preview_session` | What will the app actually put on screen when I start this routine — after the progression policy and my history have overridden the plan? |

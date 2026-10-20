@@ -922,6 +922,8 @@ describe('shared: no-state fallback', () => {
       muscle_balance: { period: 'all' }
     }
     for (const t of TOOLS) {
+      // the catalogue search needs no profile: it still answers for a fresh account
+      if (t.name === 'search_exercises') { expect(t.handler({ query: 'squat' }).exercises.length).toBeGreaterThan(0); continue }
       const r = t.handler(calls[t.name] || {})
       expect(r).toHaveProperty('error')
     }
